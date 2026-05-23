@@ -29,7 +29,9 @@
         {
           "microphonePermission": "Allow Medtrack to access your microphone to record voice broadcasts."
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser"
     ]
   }
 }

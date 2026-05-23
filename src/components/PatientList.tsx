@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Linking, Alert, ActivityIndicator, Image, Modal, SafeAreaView } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { Text } from './PoppinsText';
 import { 
   Phone, Edit, Trash2, BrainCircuit, 
@@ -218,10 +219,12 @@ export default function PatientList({
                         paddingHorizontal: 12,
                         alignSelf: 'flex-start'
                       }}
-                      onPress={() => {
-                        Linking.openURL(p.labPdfUrl!).catch(err => {
-                          Alert.alert('Error', 'Could not open PDF file.');
-                        });
+                      onPress={async () => {
+                        try {
+                          await WebBrowser.openBrowserAsync(p.labPdfUrl!);
+                        } catch (err) {
+                          Alert.alert('Error', 'Could not open PDF file inside the app.');
+                        }
                       }}
                     >
                       <FileText size={15} color="#818cf8" style={{ marginRight: 6 }} />
@@ -241,11 +244,13 @@ export default function PatientList({
                           <TouchableOpacity 
                             key={img.id} 
                             style={styles.imageThumbnailContainer}
-                            onPress={() => {
+                            onPress={async () => {
                               if (isPdf) {
-                                Linking.openURL(img.imageData).catch(err => {
-                                  Alert.alert('Error', 'Could not open PDF file.');
-                                });
+                                try {
+                                  await WebBrowser.openBrowserAsync(img.imageData);
+                                } catch (err) {
+                                  Alert.alert('Error', 'Could not open PDF file inside the app.');
+                                }
                               } else {
                                 setFullscreenImagesList(p.imaging || []);
                                 setFullscreenImageIndex(idx);
@@ -383,12 +388,14 @@ export default function PatientList({
                           borderRadius: 8,
                           marginTop: 20
                         }}
-                        onPress={() => {
+                        onPress={async () => {
                           const url = fullscreenImagesList[fullscreenImageIndex]?.imageData;
                           if (url) {
-                            Linking.openURL(url).catch(err => {
-                              Alert.alert('Error', 'Could not open PDF file.');
-                            });
+                            try {
+                              await WebBrowser.openBrowserAsync(url);
+                            } catch (err) {
+                              Alert.alert('Error', 'Could not open PDF file inside the app.');
+                            }
                           }
                         }}
                       >

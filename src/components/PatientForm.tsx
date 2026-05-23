@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
   Linking
 } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { Text } from './PoppinsText';
 import { X, Calendar as CalendarIcon, User, Phone, Info, Stethoscope, Scissors, Camera, Trash2, Plus, FlaskConical, AlertTriangle, Image as ImageIcon, ChevronLeft, ChevronRight, Check, FileText } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -31,9 +32,10 @@ interface PatientFormProps {
   initialData?: Patient;
   currentUserRole?: string;
   existingPatients?: Patient[];
+  surgeons?: string[];
 }
 
-export default function PatientForm({ isOpen, onClose, onSubmit, initialData, currentUserRole, existingPatients = [] }: PatientFormProps) {
+export default function PatientForm({ isOpen, onClose, onSubmit, initialData, currentUserRole, existingPatients = [], surgeons = ['Dr. Resident', 'Dr. Consultant'] }: PatientFormProps) {
   const [formData, setFormData] = useState<Partial<Patient>>({
     name: '',
     age: undefined,
@@ -102,7 +104,7 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
         nationalId: initialData.nationalId || '',
         requiresApproval: initialData.requiresApproval || false,
         isApproved: initialData.isApproved !== false,
-        surgeonName: initialData.surgeonName || 'Dr. Admin',
+        surgeonName: initialData.surgeonName || surgeons[0] || 'Dr. Resident',
         isSpecial: !!initialData.isSpecial,
         labPdfUrl: initialData.labPdfUrl || ''
       });
@@ -126,7 +128,7 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
         nationalId: '',
         requiresApproval: false,
         isApproved: true,
-        surgeonName: 'Dr. Admin',
+        surgeonName: surgeons[0] || 'Dr. Resident',
         isSpecial: false,
         labPdfUrl: ''
       });
@@ -362,7 +364,6 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
       Alert.alert('Error', 'Failed to pick PDF');
     }
   };
-
   const handlePickLabPdf = async () => {
     try {
       const doc = await DocumentPicker.getDocumentAsync({
@@ -377,16 +378,12 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
           const base64Data = await FileSystem.readAsStringAsync(fileUri, {
             encoding: FileSystem.EncodingType.Base64,
           });
-          
           const publicUrl = await R2Service.uploadFile(base64Data, 'pdf', 'lab', 'application/pdf');
           if (publicUrl) {
-            setFormData(prev => ({
-              ...prev,
-              labPdfUrl: publicUrl
-            }));
+            setFormData(prev => ({ ...prev, labPdfUrl: publicUrl }));
           }
         } catch (uploadError) {
-          console.error("Lab PDF upload failed:", uploadError);
+          console.error('Lab PDF upload failed:', uploadError);
           Alert.alert('Upload Error', 'Failed to upload Lab PDF to R2.');
         } finally {
           setIsUploading(false);
@@ -395,6 +392,80 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'Failed to pick PDF');
+    }
+  };
+
+  const handlePickLabReport = () => {
+    Alert.alert(
+      'Add Lab Report',
+      'Choose the source for the lab report',
+      [
+        {
+          text: '📄 Upload PDF',
+          onPress: handlePickLabPdf
+        },
+        {
+          text: '🖼️ From Gallery',
+          onPress: () => handlePickLabImage('library')
+        },
+        {
+          text: '📷 Open Camera',
+          onPress: () => handlePickLabImage('camera')
+        },
+        { text: 'Cancel', style: 'cancel' }
+      ]
+    );
+  };
+
+  const handlePickLabImage = async (source: 'library' | 'camera') => {
+    try {
+      let result;
+      if (source === 'camera') {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission Required', 'Camera access is needed to capture the lab report.');
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.8,
+          base64: true,
+        });
+      } else {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission Required', 'Gallery access is needed to pick the lab report.');
+          return;
+        }
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.8,
+          base64: true,
+        });
+      }
+
+      if (!result.canceled && result.assets[0]) {
+        setIsUploading(true);
+        try {
+          const asset = result.assets[0];
+          const base64Data = asset.base64 || await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+          const publicUrl = await R2Service.uploadFile(base64Data, 'jpg', 'lab', 'image/jpeg');
+          if (publicUrl) {
+            setFormData(prev => ({ ...prev, labPdfUrl: publicUrl }));
+          } else {
+            // Fallback to local base64
+            setFormData(prev => ({ ...prev, labPdfUrl: `data:image/jpeg;base64,${base64Data}` }));
+          }
+        } catch (uploadError) {
+          console.error('Lab image upload failed:', uploadError);
+          Alert.alert('Upload Error', 'Failed to upload lab report image.');
+        } finally {
+          setIsUploading(false);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'Failed to capture lab report image.');
     }
   };
 
@@ -539,7 +610,7 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Surgeon Name *</Text>
               <View style={styles.surgeonPicker}>
-                {['Dr. Admin', 'Dr. Resident', 'Dr. Consultant'].map((sName) => {
+                {surgeons.map((sName) => {
                   return (
                     <TouchableOpacity 
                       key={sName}
@@ -561,7 +632,7 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
               </View>
             </View>
 
-            {currentUserRole === 'admin' && (
+            {currentUserRole === 'admin' && initialData?.isCompleted && (
               <TouchableOpacity
                 style={{
                   flexDirection: 'row',
@@ -820,16 +891,31 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
                 }}>
                   <TouchableOpacity 
                     style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
-                    onPress={() => {
-                      Linking.openURL(formData.labPdfUrl!).catch(err => {
-                        Alert.alert('Error', 'Could not open PDF file.');
-                      });
+                    onPress={async () => {
+                      const url = formData.labPdfUrl!;
+                      if (url.startsWith('data:')) {
+                        Alert.alert('Lab Report', 'Report saved locally (no preview for base64 data).');
+                      } else {
+                        try {
+                          await WebBrowser.openBrowserAsync(url);
+                        } catch {
+                          Alert.alert('Error', 'Could not open the lab report.');
+                        }
+                      }
                     }}
                   >
-                    <FileText size={20} color="#f43f5e" style={{ marginRight: 10 }} />
+                    {formData.labPdfUrl.includes('.pdf') ? (
+                      <FileText size={20} color="#f43f5e" style={{ marginRight: 10 }} />
+                    ) : (
+                      <Image 
+                        source={{ uri: formData.labPdfUrl }} 
+                        style={{ width: 40, height: 40, borderRadius: 8, marginRight: 10 }}
+                        resizeMode="cover"
+                      />
+                    )}
                     <View style={{ flex: 1 }}>
-                      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>Lab Report PDF</Text>
-                      <Text style={{ color: '#64748b', fontSize: 11 }}>Tap to open document</Text>
+                      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>Lab Report</Text>
+                      <Text style={{ color: '#64748b', fontSize: 11 }}>Tap to open • {formData.labPdfUrl.includes('.pdf') ? 'PDF' : 'Image'}</Text>
                     </View>
                   </TouchableOpacity>
                   <TouchableOpacity 
@@ -853,12 +939,12 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
                     padding: 12,
                     marginTop: 10
                   }}
-                  onPress={handlePickLabPdf}
+                  onPress={handlePickLabReport}
                   disabled={isUploading}
                 >
                   <Plus size={16} color="#818cf8" style={{ marginRight: 6 }} />
                   <Text style={{ color: '#818cf8', fontSize: 13, fontWeight: '700' }}>
-                    {isUploading ? 'Uploading Document...' : 'Upload Lab PDF Report'}
+                    {isUploading ? 'Uploading...' : 'Add Lab Report (PDF / Photo)'}
                   </Text>
                 </TouchableOpacity>
               )}

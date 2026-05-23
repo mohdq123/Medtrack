@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, KeyboardAvoidingView, Platform, Animated } from 'react-native';
 import { Text } from './PoppinsText';
-import { format, eachDayOfInterval, startOfMonth, endOfMonth, isSameDay } from 'date-fns';
+import { format, eachDayOfInterval, startOfWeek, endOfWeek, isSameDay } from 'date-fns';
 import { Send, Mic, MicOff, MessageSquare, Calendar, Stethoscope, Scissors, Check, X, Clock, AlertTriangle, Square, PlayCircle, Play, Pause, Volume2 } from 'lucide-react-native';
 import { useAudioRecorder, useAudioRecorderState, AudioModule, RecordingPresets, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Patient, AdminMessage } from '../types';
 import { R2Service } from '../services/R2Service';
+import PatientDetailModal from './PatientDetailModal';
 
 const formatAudioDuration = (seconds: number) => {
   const mins = Math.floor(seconds / 60);
@@ -207,6 +208,7 @@ export default function AdminDashboard({ patients, messages, isDarkMode, onSendM
   const [isRecording, setIsRecording] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -239,10 +241,6 @@ export default function AdminDashboard({ patients, messages, isDarkMode, onSendM
   };
 
   const today = new Date();
-  const daysInMonth = eachDayOfInterval({
-    start: startOfMonth(today),
-    end: endOfMonth(today)
-  });
 
   const handleSendText = () => {
     if (!textInput.trim()) return;
@@ -309,8 +307,12 @@ export default function AdminDashboard({ patients, messages, isDarkMode, onSendM
     }
   };
 
-  // Filter days that actually have patients scheduled
-  const activeDays = daysInMonth.filter(day => 
+  // Filter days with patients in the current week only
+  const weekStart = startOfWeek(today, { weekStartsOn: 0 });
+  const weekEnd = endOfWeek(today, { weekStartsOn: 0 });
+  const daysInWeek = eachDayOfInterval({ start: weekStart, end: weekEnd });
+
+  const activeDays = daysInWeek.filter(day =>
     patients.some(p => {
       if (!p.appointmentDate) return false;
       const date = new Date(p.appointmentDate);
@@ -427,7 +429,12 @@ export default function AdminDashboard({ patients, messages, isDarkMode, onSendM
 
                   <View style={styles.dayPatientsList}>
                     {dayPatients.map(p => (
-                      <View key={p.id} style={styles.patientRow}>
+                      <TouchableOpacity
+                        key={p.id}
+                        style={styles.patientRow}
+                        onPress={() => setSelectedPatient(p)}
+                        activeOpacity={0.75}
+                      >
                         <View style={[
                           styles.patientIconBox,
                           p.category === 'ESWL' ? styles.iconBoxEswl : styles.iconBoxSurg
@@ -447,7 +454,7 @@ export default function AdminDashboard({ patients, messages, isDarkMode, onSendM
                             {format(new Date(p.appointmentDate), 'HH:mm')}
                           </Text>
                         )}
-                      </View>
+                      </TouchableOpacity>
                     ))}
                   </View>
                 </View>
@@ -455,9 +462,10 @@ export default function AdminDashboard({ patients, messages, isDarkMode, onSendM
             })
           ) : (
             <View style={styles.emptyBox}>
-              <Text style={styles.emptyText}>No operations scheduled this month</Text>
+              <Text style={styles.emptyText}>No operations scheduled this week</Text>
             </View>
           )}
+          <PatientDetailModal patient={selectedPatient} onClose={() => setSelectedPatient(null)} />
         </ScrollView>
       ) : (
         <ScrollView style={styles.tabContent} contentContainerStyle={{ paddingBottom: 24 }}>

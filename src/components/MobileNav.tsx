@@ -6,16 +6,33 @@ import { Text } from './PoppinsText';
 interface MobileNavProps {
   view: string;
   setView: (view: any) => void;
+  currentUserRole?: string;
 }
 
-export default function MobileNav({ view, setView }: MobileNavProps) {
+export default function MobileNav({ view, setView, currentUserRole }: MobileNavProps) {
+  const isAdmin = currentUserRole === 'admin';
+  const isResident = currentUserRole === 'resident';
+
+  if (isAdmin) {
+    return (
+      <View style={styles.navBar}>
+        <NavItem active={view === 'dashboard'} icon={<LayoutDashboard size={20} />} label="Dashboard" onClick={() => setView('dashboard')} />
+        <NavItem active={view === 'calendar'} icon={<Calendar size={20} />} label="Theater" onClick={() => setView('calendar')} />
+        <NavItem active={view === 'surgical'} icon={<Scissors size={20} />} label="Surgery" onClick={() => setView('surgical')} />
+        <NavItem active={view === 'eswl'} icon={<Stethoscope size={20} />} label="ESWL" onClick={() => setView('eswl')} />
+        <NavItem active={view === 'settings'} icon={<User size={20} />} label="Me" onClick={() => setView('settings')} />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.navBar}>
       <NavItem active={view === 'dashboard'} icon={<LayoutDashboard size={20} />} label="Today" onClick={() => setView('dashboard')} />
       <NavItem active={view === 'surgical'} icon={<Scissors size={20} />} label="Surgery" onClick={() => setView('surgical')} />
       <NavItem active={view === 'eswl'} icon={<Stethoscope size={20} />} label="ESWL" onClick={() => setView('eswl')} />
-      <NavItem active={view === 'calendar'} icon={<Calendar size={20} />} label="Theater" onClick={() => setView('calendar')} />
-      <NavItem active={view === 'admin'} icon={<Settings size={20} />} label="Admin" onClick={() => setView('admin')} />
+      {!isResident && (
+        <NavItem active={view === 'calendar'} icon={<Calendar size={20} />} label="Theater" onClick={() => setView('calendar')} />
+      )}
       <NavItem active={view === 'settings'} icon={<User size={20} />} label="Me" onClick={() => setView('settings')} />
     </View>
   );

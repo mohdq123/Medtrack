@@ -1,19 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  TextInput, 
-  TouchableOpacity, 
-  StyleSheet, 
-  ActivityIndicator, 
-  Alert, 
-  KeyboardAvoidingView, 
-  Platform, 
+import {
+  View,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   SafeAreaView,
-  Modal
+  Modal,
+  Image
 } from 'react-native';
 import { Text } from './PoppinsText';
 import { Stethoscope, LogIn, Mail, Lock, AlertCircle, Database, Check } from 'lucide-react-native';
+import { useSignUp, useSignIn } from '@clerk/clerk-expo';
 import { BackendService } from '../services/BackendService';
 import { getDbUrl } from '../services/database';
 import { User, UserRole } from '../types';
@@ -35,6 +37,12 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [unconfirmedEmail, setUnconfirmedEmail] = useState<string | null>(null);
 
+  const [rememberMe, setRememberMe] = useState(true);
+  const [otpCode, setOtpCode] = useState('');
+
+  const { isLoaded: isSignUpLoaded, signUp, setActive: setSignUpActive } = useSignUp();
+  const { isLoaded: isSignInLoaded, signIn, setActive: setSignInActive } = useSignIn();
+
   // Google Modal states
   const [googleModalVisible, setGoogleModalVisible] = useState(false);
   const [customGoogleEmail, setCustomGoogleEmail] = useState('');
@@ -48,11 +56,19 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
   ];
 
   useEffect(() => {
-    async function checkDb() {
+    async function checkDbAndRemembered() {
       const url = await getDbUrl();
       setDbConnected(!!url);
+      const remembered = await BackendService.getRememberedUser();
+      if (remembered) {
+        setEmail(remembered.emailOrName);
+        if (remembered.password) {
+          setPassword(remembered.password);
+        }
+        setRememberMe(true);
+      }
     }
-    checkDb();
+    checkDbAndRemembered();
   }, []);
 
   const handleLogin = async () => {
@@ -65,21 +81,59 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
     setError(null);
 
     try {
-      const users = await BackendService.getUsers();
-      const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase() && u.password === password);
-
-      if (user) {
-        if (user.confirmed === false) {
-          setUnconfirmedEmail(user.email);
-        } else {
-          onLogin(user);
-        }
-      } else {
-        setError("Invalid email or password. Please sign up or check credentials.");
+      if (!isSignInLoaded) {
+        setError("Sign in service is not ready. Please try again.");
+        setLoading(false);
+        return;
       }
-    } catch (err) {
+
+      let loginIdentifier = email.trim();
+      if (!loginIdentifier.includes('@')) {
+        const users = await BackendService.getUsers();
+        const found = users.find(u => u.name.toLowerCase() === loginIdentifier.toLowerCase());
+        if (found) {
+          loginIdentifier = found.email;
+        } else {
+          setError("Doctor name not found in system.");
+          setLoading(false);
+          return;
+        }
+      }
+
+      const signInAttempt = await signIn.create({
+        identifier: loginIdentifier.toLowerCase(),
+        password,
+      });
+
+      if (signInAttempt.status === 'complete') {
+        const users = await BackendService.getUsers();
+        let dbUser = users.find(u => u.email.toLowerCase() === loginIdentifier.toLowerCase());
+        if (!dbUser) {
+          let role: UserRole = 'resident';
+          const adminEmail = process.env.EXPO_PUBLIC_ADMIN_EMAIL;
+          const consultantEmail = process.env.EXPO_PUBLIC_CONSULTANT_EMAIL;
+          if (adminEmail && loginIdentifier.toLowerCase() === adminEmail.toLowerCase()) {
+            role = 'admin';
+          } else if (consultantEmail && loginIdentifier.toLowerCase() === consultantEmail.toLowerCase()) {
+            role = 'consultant';
+          }
+          dbUser = await BackendService.createOrGetUser(loginIdentifier.toLowerCase(), "Dr. Medtrack", role, password, true);
+        }
+
+        if (rememberMe) {
+          await BackendService.setRememberedUser({ emailOrName: email, password });
+        } else {
+          await BackendService.setRememberedUser(null);
+        }
+
+        await setSignInActive({ session: signInAttempt.createdSessionId });
+        onLogin(dbUser);
+      } else {
+        setError("Sign in status: " + signInAttempt.status);
+      }
+    } catch (err: any) {
       console.error(err);
-      setError("An error occurred during authentication.");
+      setError(err.errors?.[0]?.message || "Invalid credentials. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -99,6 +153,12 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
     setError(null);
 
     try {
+      if (!isSignUpLoaded) {
+        setError("Sign up service is not ready. Please try again.");
+        setLoading(false);
+        return;
+      }
+
       const users = await BackendService.getUsers();
       const existing = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
       if (existing) {
@@ -107,12 +167,65 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
         return;
       }
 
-      await BackendService.createOrGetUser(email.trim().toLowerCase(), name.trim(), 'admin', password, false);
+      await signUp.create({
+        emailAddress: email.trim().toLowerCase(),
+        password,
+      });
+
+      await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+      setOtpCode('');
       setUnconfirmedEmail(email.trim().toLowerCase());
-      setAuthMode('signin');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("An error occurred during sign up.");
+      setError(err.errors?.[0]?.message || "An error occurred during sign up.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    if (!signUp || !setSignUpActive) {
+      Alert.alert("Error", "Sign up service is not ready. Please try again.");
+      return;
+    }
+
+    if (!otpCode.trim() || otpCode.length < 6) {
+      Alert.alert("Error", "Please enter a valid 6-digit code.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const completeSignUp = await signUp.attemptEmailAddressVerification({
+        code: otpCode.trim(),
+      });
+
+      if (completeSignUp.status === 'complete') {
+        let role: UserRole = 'resident';
+        const adminEmail = process.env.EXPO_PUBLIC_ADMIN_EMAIL;
+        const consultantEmail = process.env.EXPO_PUBLIC_CONSULTANT_EMAIL;
+        if (adminEmail && email.toLowerCase() === adminEmail.toLowerCase()) {
+          role = 'admin';
+        } else if (consultantEmail && email.toLowerCase() === consultantEmail.toLowerCase()) {
+          role = 'consultant';
+        }
+        const confirmedUser = await BackendService.createOrGetUser(email.trim().toLowerCase(), name.trim(), role, password, true);
+
+        if (rememberMe) {
+          await BackendService.setRememberedUser({ emailOrName: email, password });
+        } else {
+          await BackendService.setRememberedUser(null);
+        }
+
+        await setSignUpActive({ session: completeSignUp.createdSessionId });
+        setUnconfirmedEmail(null);
+        onLogin(confirmedUser);
+      } else {
+        Alert.alert("Verification Incomplete", "Sign up is not complete.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      Alert.alert("Verification Failed", err.errors?.[0]?.message || "Invalid verification code.");
     } finally {
       setLoading(false);
     }
@@ -132,7 +245,15 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
           setLoading(false);
           return;
         }
-        await BackendService.createOrGetUser(gEmail, gName, 'admin', 'google-auth', false);
+        let role: UserRole = 'resident';
+        const adminEmail = process.env.EXPO_PUBLIC_ADMIN_EMAIL;
+        const consultantEmail = process.env.EXPO_PUBLIC_CONSULTANT_EMAIL;
+        if (adminEmail && gEmail.toLowerCase() === adminEmail.toLowerCase()) {
+          role = 'admin';
+        } else if (consultantEmail && gEmail.toLowerCase() === consultantEmail.toLowerCase()) {
+          role = 'consultant';
+        }
+        await BackendService.createOrGetUser(gEmail, gName, role, 'google-auth', false);
         setUnconfirmedEmail(gEmail);
       } else {
         // Sign In mode
@@ -173,14 +294,14 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
   return (
     <SafeAreaView style={styles.safeArea}>
       {/* Database Setup Button (Top Right, unobtrusive configuration) */}
-      <TouchableOpacity 
-        onPress={onOpenDatabaseConfig} 
+      <TouchableOpacity
+        onPress={onOpenDatabaseConfig}
         style={styles.configButton}
       >
         <Database size={20} color={dbConnected ? '#10b981' : '#f59e0b'} />
       </TouchableOpacity>
 
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.container}
       >
@@ -198,13 +319,13 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
           <View style={styles.card}>
             {/* Mode switch */}
             <View style={{ flexDirection: 'row', marginBottom: 20, backgroundColor: '#1f2937', borderRadius: 14, padding: 4 }}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 }, authMode === 'signin' && { backgroundColor: '#4f46e5' }]}
                 onPress={() => { setAuthMode('signin'); setError(null); }}
               >
                 <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Sign In</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 }, authMode === 'signup' && { backgroundColor: '#4f46e5' }]}
                 onPress={() => { setAuthMode('signup'); setError(null); }}
               >
@@ -223,6 +344,7 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                     value={name}
                     onChangeText={setName}
                     autoCorrect={false}
+                    autoCapitalize="words"
                   />
                 </View>
               </View>
@@ -230,16 +352,16 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
 
             {/* Email field */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email Address</Text>
+              <Text style={styles.label}>{authMode === 'signin' ? 'Email or Doctor Name' : 'Email Address'}</Text>
               <View style={styles.inputWrapper}>
                 <Mail size={18} color="#94a3b8" style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
-                  placeholder="name@medtrack.com"
+                  placeholder={authMode === 'signin' ? "doctor@medtrack.com or Dr. Name" : "name@medtrack.com"}
                   placeholderTextColor="#475569"
                   value={email}
                   onChangeText={setEmail}
-                  keyboardType="email-address"
+                  keyboardType={authMode === 'signin' ? 'default' : 'email-address'}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
@@ -264,6 +386,22 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
               </View>
             </View>
 
+            {authMode === 'signin' && (
+              <TouchableOpacity
+                style={styles.rememberMeContainer}
+                onPress={() => setRememberMe(!rememberMe)}
+                activeOpacity={0.8}
+              >
+                <View style={[
+                  styles.checkbox,
+                  rememberMe && styles.checkboxChecked
+                ]}>
+                  {rememberMe && <Check size={12} color="#fff" />}
+                </View>
+                <Text style={styles.rememberMeText}>Remember Me</Text>
+              </TouchableOpacity>
+            )}
+
             {error && (
               <View style={styles.errorContainer}>
                 <AlertCircle size={16} color="#ef4444" style={{ marginRight: 8, marginTop: 2 }} />
@@ -271,8 +409,8 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
               </View>
             )}
 
-            <TouchableOpacity 
-              style={styles.loginButton} 
+            <TouchableOpacity
+              style={styles.loginButton}
               onPress={authMode === 'signin' ? handleLogin : handleSignUp}
               disabled={loading}
             >
@@ -296,13 +434,17 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
             </View>
 
             {/* Google Sign-In Button */}
-            <TouchableOpacity 
-              style={styles.googleButton} 
+            <TouchableOpacity
+              style={styles.googleButton}
               onPress={() => setGoogleModalVisible(true)}
               disabled={loading}
             >
               <View style={styles.googleIconContainer}>
-                <Text style={styles.googleIconText}>G</Text>
+                <Image
+                  source={require('../../assets/google-icon.png')}
+                  style={styles.googleIconImage}
+                  resizeMode="contain"
+                />
               </View>
               <Text style={styles.googleButtonText}>
                 {authMode === 'signin' ? 'Continue with Google' : 'Sign Up with Google'}
@@ -310,19 +452,14 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
             </TouchableOpacity>
 
             {/* Demo Credentials description */}
-            <View style={styles.credentialsBox}>
-              <Text style={styles.credentialsHeader}>Demo & Registration Information</Text>
-              <Text style={styles.credentialText}>
-                Sign up with any new email/password or mock Google accounts to create an account, verify via confirmation simulator, and sign in.
-              </Text>
-            </View>
+
           </View>
 
           <Text style={styles.footerText}>Authorized Hospital Personnel Only</Text>
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Verification Simulation Overlay Modal */}
+      {/* Clerk 6-Digit OTP Verification Modal */}
       {unconfirmedEmail && (
         <Modal transparent animationType="fade" visible={!!unconfirmedEmail}>
           <View style={styles.modalOverlay}>
@@ -331,30 +468,54 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                 <Mail size={32} color="#6366f1" />
               </View>
               <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900', textAlign: 'center', marginBottom: 8 }}>
-                Confirm Your Email
+                Enter Verification Code
               </Text>
               <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', lineHeight: 20, marginBottom: 24 }}>
-                We've sent a verification link to{"\n"}
-                <Text style={{ color: '#fff', fontWeight: '800' }}>{unconfirmedEmail}</Text>.{"\n"}
-                Please confirm it to activate your account.
+                We've sent a 6-digit OTP verification code to{"\n"}
+                <Text style={{ color: '#fff', fontWeight: '800' }}>{unconfirmedEmail}</Text>.
               </Text>
-              
-              <TouchableOpacity 
-                style={{ width: '100%', backgroundColor: '#10b981', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginBottom: 12 }}
-                onPress={async () => {
-                  await BackendService.confirmUserEmail(unconfirmedEmail);
-                  setUnconfirmedEmail(null);
-                  Alert.alert("Verified", "Your email has been confirmed! You can now sign in.");
+
+              <TextInput
+                style={{
+                  backgroundColor: '#1e293b',
+                  width: '100%',
+                  height: 56,
+                  borderRadius: 16,
+                  borderColor: '#334155',
+                  borderWidth: 1,
+                  color: '#fff',
+                  fontSize: 24,
+                  fontWeight: '700',
+                  textAlign: 'center',
+                  marginBottom: 20,
+                  letterSpacing: 6,
                 }}
+                placeholder="000000"
+                placeholderTextColor="#475569"
+                keyboardType="number-pad"
+                maxLength={6}
+                value={otpCode}
+                onChangeText={setOtpCode}
+              />
+
+              <TouchableOpacity
+                style={{ width: '100%', backgroundColor: '#6366f1', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginBottom: 12 }}
+                onPress={handleVerifyCode}
+                disabled={loading || otpCode.length < 6}
               >
-                <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Simulate Email Confirmation Link</Text>
+                {loading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Verify & Sign Up</Text>
+                )}
               </TouchableOpacity>
-              
-              <TouchableOpacity 
+
+              <TouchableOpacity
                 style={{ width: '100%', paddingVertical: 12, alignItems: 'center' }}
                 onPress={() => setUnconfirmedEmail(null)}
+                disabled={loading}
               >
-                <Text style={{ color: '#64748b', fontWeight: '700', fontSize: 13 }}>Cancel / Back</Text>
+                <Text style={{ color: '#64748b', fontWeight: '700', fontSize: 13 }}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -369,7 +530,7 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
         onRequestClose={() => setGoogleModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView 
+          <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={{ width: '100%' }}
           >
@@ -377,7 +538,11 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
               <View style={styles.modalContent}>
                 <View style={styles.modalHeader}>
                   <View style={styles.googleIconHeaderContainer}>
-                    <Text style={styles.googleIconHeader}>G</Text>
+                    <Image
+                      source={require('../../assets/google-icon.png')}
+                      style={styles.googleIconHeaderImage}
+                      resizeMode="contain"
+                    />
                   </View>
                   <Text style={styles.modalTitle}>
                     {authMode === 'signin' ? 'Sign in with Google' : 'Sign up with Google'}
@@ -405,7 +570,7 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                       ))}
                     </View>
 
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.useAnotherButton}
                       onPress={() => setShowCustomGoogleForm(true)}
                     >
@@ -446,13 +611,13 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                     </View>
 
                     <View style={styles.modalActions}>
-                      <TouchableOpacity 
+                      <TouchableOpacity
                         style={styles.modalCancelBtn}
                         onPress={() => setShowCustomGoogleForm(false)}
                       >
                         <Text style={styles.modalCancelBtnText}>Back</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity 
+                      <TouchableOpacity
                         style={styles.modalSubmitBtn}
                         onPress={handleCustomGoogleSubmit}
                       >
@@ -464,7 +629,7 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                   </View>
                 )}
 
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={[styles.modalCancelBtn, { marginTop: 12, width: '100%' }]}
                   onPress={() => {
                     setGoogleModalVisible(false);
@@ -634,23 +799,48 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   googleIconContainer: {
-    backgroundColor: '#ea4335',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    backgroundColor: '#fff',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
+    overflow: 'hidden',
   },
-  googleIconText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '900',
+  googleIconImage: {
+    width: 24,
+    height: 24,
   },
   googleButtonText: {
     color: '#0f172a',
     fontSize: 14,
     fontWeight: '700',
+  },
+  rememberMeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+    alignSelf: 'flex-start',
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#475569',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  checkboxChecked: {
+    backgroundColor: '#818cf8',
+    borderColor: '#818cf8',
+  },
+  rememberMeText: {
+    color: '#94a3b8',
+    fontSize: 13,
+    fontWeight: '600',
   },
   credentialsBox: {
     backgroundColor: '#0f172a',
@@ -716,18 +906,18 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   googleIconHeaderContainer: {
-    backgroundColor: '#ea4335',
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    backgroundColor: '#fff',
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 12,
+    overflow: 'hidden',
   },
-  googleIconHeader: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: '900',
+  googleIconHeaderImage: {
+    width: 44,
+    height: 44,
   },
   modalTitle: {
     color: '#fff',

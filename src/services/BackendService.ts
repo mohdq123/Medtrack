@@ -374,5 +374,27 @@ export const BackendService = {
     if (!sent.includes(patientId)) {
       await AsyncStorage.setItem(STORAGE_KEYS.SENT_NOTIFICATIONS, JSON.stringify([...sent, patientId]));
     }
+  },
+
+  // --- Remember Me Operations ---
+  getRememberedUser: async (): Promise<{ emailOrName: string; password?: string } | null> => {
+    try {
+      const data = await AsyncStorage.getItem('remembered_user');
+      return data ? JSON.parse(data) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  setRememberedUser: async (credentials: { emailOrName: string; password?: string } | null): Promise<void> => {
+    try {
+      if (credentials) {
+        await AsyncStorage.setItem('remembered_user', JSON.stringify(credentials));
+      } else {
+        await AsyncStorage.removeItem('remembered_user');
+      }
+    } catch (e) {
+      console.error(e);
+    }
   }
 };

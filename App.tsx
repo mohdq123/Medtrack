@@ -60,6 +60,9 @@ if (typeof global.TextDecoder === 'undefined') {
   } as any;
 }
 
+import * as SecureStore from 'expo-secure-store';
+import { ClerkProvider, ClerkLoaded, useUser, useAuth } from '@clerk/clerk-expo';
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   StyleSheet, 
@@ -101,11 +104,13 @@ import {
   Camera,
   X,
   Play,
-  Pause
+  Pause,
+  History,
+  Archive
 } from 'lucide-react-native';
 import { isSameDay, format, isSunday, nextSunday, startOfDay } from 'date-fns';
 
-import { Patient, User, AdminMessage } from './src/types';
+import { Patient, User, UserRole, AdminMessage } from './src/types';
 import { BackendService } from './src/services/BackendService';
 import { NotificationService } from './src/services/NotificationService';
 import { getDbUrl, testConnectionAndInit } from './src/services/database';
@@ -123,6 +128,8 @@ import Login from './src/components/Login';
 import MobileNav from './src/components/MobileNav';
 import ChangePasswordModal from './src/components/ChangePasswordModal';
 import DatabaseConfig from './src/components/DatabaseConfig';
+import PatientDetailModal from './src/components/PatientDetailModal';
+import ArchiveModal from './src/components/ArchiveModal';
 
 const formatAudioDuration = (seconds: number) => {
   const mins = Math.floor(seconds / 60);
@@ -396,7 +403,7 @@ const getGreeting = () => {
   return 'Good Evening';
 };
 
-export default function App() {
+function MainApp() {
   const [fontsLoaded] = useFonts({
     'DMSans-Regular':  DMSans_400Regular,
     'DMSans-Medium':   DMSans_500Medium,
@@ -407,9 +414,12 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [messages, setMessages] = useState<AdminMessage[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [view, setView] = useState<'dashboard' | 'calendar' | 'surgical' | 'eswl' | 'admin' | 'archive' | 'settings'>('dashboard');
   const [eswlSubView, setEswlSubView] = useState<'list' | 'next'>('list');
-  const [archiveSubView, setArchiveSubView] = useState<'Surgical' | 'ESWL'>('Surgical');
+  const [prevPatientView, setPrevPatientView] = useState<'surgical' | 'eswl'>('surgical');
+  const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
+  const [archiveInitialCategory, setArchiveInitialCategory] = useState<'Surgical' | 'ESWL'>('Surgical');
   
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
@@ -428,6 +438,73 @@ export default function App() {
   const [editPhone, setEditPhone] = useState('');
   const [editProfilePic, setEditProfilePic] = useState('');
 
+  const { isLoaded, isSignedIn, user: clerkUser } = useUser();
+  const { signOut } = useAuth();
+
+  useEffect(() => {
+    async function syncClerkUser() {
+      if (!isLoaded || isLoading) return;
+      
+      if (isSignedIn && clerkUser) {
+        try {
+          const email = clerkUser.primaryEmailAddress?.emailAddress;
+          if (email) {
+            const allUsers = await BackendService.getUsers();
+            setUsers(allUsers);
+            let matchedUser = allUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
+            if (!matchedUser) {
+              const name = clerkUser.fullName || clerkUser.firstName || "Dr. Medtrack";
+              
+              let role: UserRole = 'resident';
+              const adminEmail = process.env.EXPO_PUBLIC_ADMIN_EMAIL;
+              const consultantEmail = process.env.EXPO_PUBLIC_CONSULTANT_EMAIL;
+              if (adminEmail && email.toLowerCase() === adminEmail.toLowerCase()) {
+                role = 'admin';
+              } else if (consultantEmail && email.toLowerCase() === consultantEmail.toLowerCase()) {
+                role = 'consultant';
+              }
+
+              matchedUser = await BackendService.createOrGetUser(email, name, role, 'clerk-auth', true);
+              const refreshedUsers = await BackendService.getUsers();
+              setUsers(refreshedUsers);
+            }
+            if (JSON.stringify(matchedUser) !== JSON.stringify(currentUser)) {
+              setCurrentUser(matchedUser);
+            }
+          }
+        } catch (e) {
+          console.error("Clerk sync error:", e);
+        }
+      } else if (!isSignedIn && currentUser) {
+        setCurrentUser(null);
+      }
+    }
+    syncClerkUser();
+  }, [isLoaded, isSignedIn, clerkUser, isLoading]);
+
+  useEffect(() => {
+    if (currentUser?.role === 'resident' && (view === 'calendar' || view === 'admin')) {
+      setView('dashboard');
+    }
+    if (view === 'admin') {
+      setView('dashboard');
+    }
+  }, [currentUser, view]);
+
+  // Auto-archive past procedures when navigating to ESWL or Surgery tabs
+  useEffect(() => {
+    if (view === 'surgical' || view === 'eswl') {
+      const today = startOfDay(new Date());
+      setPatients(prev => prev.map(p => {
+        if (p.appointmentDate && !p.isCompleted) {
+          const apptDate = startOfDay(new Date(p.appointmentDate));
+          if (apptDate < today) return { ...p, isCompleted: true };
+        }
+        return p;
+      }));
+    }
+  }, [view]);
+
   const initData = async () => {
     try {
       const dbUrl = await getDbUrl();
@@ -435,19 +512,15 @@ export default function App() {
         await testConnectionAndInit(dbUrl);
       }
 
-      const activeUser = await BackendService.getActiveUser();
-      setCurrentUser(activeUser);
-      if (activeUser) {
-        setView('dashboard');
-      }
-
       const activeTheme = await BackendService.getTheme();
       setIsDarkMode(activeTheme === 'dark');
 
       const savedPatients = await BackendService.getPatients();
       const savedMessages = await BackendService.getMessages();
+      const allUsers = await BackendService.getUsers();
       setPatients(savedPatients);
       setMessages(savedMessages);
+      setUsers(allUsers);
     } catch (e) {
       console.error("Init Error:", e);
     } finally {
@@ -575,8 +648,12 @@ export default function App() {
       {
         text: 'Logout',
         style: 'destructive',
-        onPress: () => {
-          BackendService.setActiveUser(null);
+        onPress: async () => {
+          try {
+            await signOut();
+          } catch (e) {
+            console.error("Failed to sign out from Clerk:", e);
+          }
           setCurrentUser(null);
           setView('dashboard');
         }
@@ -592,8 +669,6 @@ export default function App() {
         const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                              p.phoneNumber.includes(searchQuery);
         if (!matchesSearch) return false;
-
-        if (view === 'archive') return p.isCompleted && p.category === archiveSubView;
         if (p.isCompleted) return false;
 
         if (view === 'eswl') {
@@ -620,17 +695,7 @@ export default function App() {
         const dateB = b.appointmentDate ? new Date(b.appointmentDate).getTime() : Infinity;
         return dateA - dateB;
       });
-  }, [patients, view, eswlSubView, archiveSubView, searchQuery]);
-
-  const groupedArchivePatients = useMemo(() => {
-    const groups: Record<string, Patient[]> = {};
-    filteredPatients.forEach(p => {
-      const dateKey = p.appointmentDate ? format(new Date(p.appointmentDate), 'yyyy-MM-dd') : 'No Date';
-      if (!groups[dateKey]) groups[dateKey] = [];
-      groups[dateKey].push(p);
-    });
-    return Object.fromEntries(Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0])));
-  }, [filteredPatients]);
+  }, [patients, view, eswlSubView, searchQuery]);
 
   const groupedSurgicalPatients = useMemo(() => {
     const groups: Record<string, Patient[]> = {};
@@ -651,6 +716,8 @@ export default function App() {
   const toggleComplete = (id: string) => {
     setPatients(prev => prev.map(p => p.id === id ? { ...p, isCompleted: !p.isCompleted } : p));
   };
+
+
 
   const openEditProfile = () => {
     if (!currentUser) return;
@@ -702,6 +769,9 @@ export default function App() {
       setCurrentUser(updatedUser);
       await AsyncStorage.setItem('medtrack_user', JSON.stringify(updatedUser));
       
+      const allUsers = await BackendService.getUsers();
+      setUsers(allUsers);
+      
       setIsEditProfileOpen(false);
       Alert.alert('Success', 'Profile updated successfully.');
     } catch (e) {
@@ -731,13 +801,22 @@ export default function App() {
   };
 
   const getSurgeonStats = () => {
-    let surgeons = ['Dr. Admin', 'Dr. Resident', 'Dr. Consultant'];
-    return surgeons.map(s => {
+    const surgeonUsers = users.filter(u => u.role !== 'admin');
+    const surgeonNames = surgeonUsers.map(u => {
+      let name = u.name.trim();
+      if (!name.toLowerCase().startsWith('dr.')) {
+        name = `Dr. ${name}`;
+      }
+      return name;
+    });
+
+    if (surgeonNames.length === 0) {
+      return [];
+    }
+
+    return surgeonNames.map(s => {
       const sPatients = patients.filter(p => {
-        if (s === 'Dr. Admin') {
-          return p.surgeonName === 'Dr. Admin' || p.surgeonName === 'Dr. Administrator';
-        }
-        return p.surgeonName === s;
+        return p.surgeonName === s || p.surgeonName === s.replace('Dr. ', '');
       });
       const scheduled = sPatients.filter(p => p.appointmentDate && !p.isCompleted && !p.isCancelled).length;
       const done = sPatients.filter(p => p.isCompleted).length;
@@ -861,7 +940,7 @@ export default function App() {
     );
   }
 
-  const isSearchVisible = view === 'surgical' || view === 'eswl' || view === 'archive';
+  const isSearchVisible = view === 'surgical' || view === 'eswl';
 
   return (
     <SafeAreaView style={[styles.appContainer, isDarkMode ? styles.darkBg : styles.lightBg]}>
@@ -921,6 +1000,21 @@ export default function App() {
               <Text style={styles.headerSubtitle}>{currentUser.name}</Text>
             </View>
             <View style={styles.headerActions}>
+              {(view === 'surgical' || view === 'eswl') && (
+                <TouchableOpacity 
+                  onPress={() => {
+                    setArchiveInitialCategory(view === 'eswl' ? 'ESWL' : 'Surgical');
+                    setIsArchiveModalOpen(true);
+                  }} 
+                  style={[
+                    styles.headerBtn,
+                    isDarkMode ? styles.headerBtnDark : styles.headerBtnLight,
+                    { marginRight: 8 },
+                  ]}
+                >
+                  <Archive size={18} color="#64748b" />
+                </TouchableOpacity>
+              )}
               <TouchableOpacity 
                 onPress={() => setIsDarkMode(!isDarkMode)} 
                 style={[styles.headerBtn, isDarkMode ? styles.headerBtnDark : styles.headerBtnLight]}
@@ -953,50 +1047,62 @@ export default function App() {
         keyboardShouldPersistTaps="handled"
       >
         {view === 'dashboard' && (
-          <View style={styles.gapContainer}>
-            {/* Display Broadcast/System Messages if any */}
-            {messages.length > 0 && (
-              <View style={styles.broadcastBox}>
-                <Text style={styles.broadcastBoxHeader}>Department Announcements</Text>
-                {messages.slice(0, 3).map((m) => {
-                  if (m.type === 'voice' && m.audioUrl) {
-                    return (
-                      <VoiceMessageRow 
-                        key={m.id} 
-                        message={m} 
-                        isDarkMode={isDarkMode} 
-                        autoPlayMessageId={autoPlayMessageId}
-                        onClearAutoPlay={() => setAutoPlayMessageId(null)}
-                        onDelete={handleDeleteMessage}
-                      />
-                    );
-                  }
-                  return (
-                    <View key={m.id} style={styles.messageRow}>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%' }}>
-                        <View style={{ flexDirection: 'row', flex: 1, marginRight: 8 }}>
-                          <View style={styles.bulletDot} />
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.messageContent}>{m.content}</Text>
-                            <Text style={styles.messageTime}>{m.sender} • {format(new Date(m.timestamp), 'MMM d, h:mm a')}</Text>
-                          </View>
-                        </View>
-                        <TouchableOpacity onPress={() => handleDeleteMessage(m.id)} style={{ padding: 4 }}>
-                          <X size={14} color="#ef4444" />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            )}
-
-            <TodayOperations 
+          currentUser?.role === 'admin' ? (
+            <AdminDashboard 
               patients={patients} 
-              onPatientClick={(p) => { setEditingPatient(p); setIsFormOpen(true); }} 
-              onToggleComplete={toggleComplete} 
+              messages={messages}
+              isDarkMode={isDarkMode}
+              onSendMessage={handleSendMessage} 
+              onApprovePatient={handleApprovePatient}
+              onRejectPatient={handleRejectPatient}
+              onDeleteMessage={handleDeleteMessage}
             />
-          </View>
+          ) : (
+            <View style={styles.gapContainer}>
+              {/* Display Broadcast/System Messages if any */}
+              {messages.length > 0 && (
+                <View style={styles.broadcastBox}>
+                  <Text style={styles.broadcastBoxHeader}>Department Announcements</Text>
+                  {messages.slice(0, 3).map((m) => {
+                    if (m.type === 'voice' && m.audioUrl) {
+                      return (
+                        <VoiceMessageRow 
+                          key={m.id} 
+                          message={m} 
+                          isDarkMode={isDarkMode} 
+                          autoPlayMessageId={autoPlayMessageId}
+                          onClearAutoPlay={() => setAutoPlayMessageId(null)}
+                          onDelete={handleDeleteMessage}
+                        />
+                      );
+                    }
+                    return (
+                      <View key={m.id} style={styles.messageRow}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%' }}>
+                          <View style={{ flexDirection: 'row', flex: 1, marginRight: 8 }}>
+                            <View style={styles.bulletDot} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.messageContent}>{m.content}</Text>
+                              <Text style={styles.messageTime}>{m.sender} • {format(new Date(m.timestamp), 'MMM d, h:mm a')}</Text>
+                            </View>
+                          </View>
+                          <TouchableOpacity onPress={() => handleDeleteMessage(m.id)} style={{ padding: 4 }}>
+                            <X size={14} color="#ef4444" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
+              <TodayOperations 
+                patients={patients} 
+                onPatientClick={(p) => { setEditingPatient(p); setIsFormOpen(true); }} 
+                onToggleComplete={toggleComplete} 
+              />
+            </View>
+          )
         )}
 
         {view === 'eswl' && (
@@ -1057,53 +1163,21 @@ export default function App() {
 
         {view === 'calendar' && (
           <Calendar 
-            patients={patients.filter(p => p.category === 'Surgical' && p.appointmentDate)} 
+            patients={patients.filter(p => p.appointmentDate)} 
             onDateSelect={setSelectedDate} 
           />
         )}
 
-        {view === 'archive' && (
-          <View style={styles.gapContainer}>
-            <View style={styles.subTabsContainer}>
-              <TouchableOpacity 
-                style={[styles.subTab, archiveSubView === 'Surgical' && styles.subTabActive]}
-                onPress={() => setArchiveSubView('Surgical')}
-              >
-                <Text style={[styles.subTabText, archiveSubView === 'Surgical' && styles.subTabTextActive]}>Surgical</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.subTab, archiveSubView === 'ESWL' && styles.subTabActive]}
-                onPress={() => setArchiveSubView('ESWL')}
-              >
-                <Text style={[styles.subTabText, archiveSubView === 'ESWL' && styles.subTabTextActive]}>ESWL</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.archiveGroups}>
-              {Object.keys(groupedArchivePatients).length > 0 ? (
-                Object.entries(groupedArchivePatients).map(([dateKey, group]) => (
-                  <View key={dateKey} style={styles.archiveGroup}>
-                    <Text style={styles.archiveGroupTitle}>
-                      {dateKey === 'No Date' ? 'NOT DATED' : format(new Date(dateKey), 'EEEE, MMM do')}
-                    </Text>
-                     <PatientList 
-                      patients={group} 
-                      onEdit={setEditingPatient} 
-                      onDelete={(id) => setPatients(prev => prev.filter(p => p.id !== id))} 
-                      onToggleComplete={toggleComplete} 
-                      onReaddToWaitlist={handleReaddToWaitlist}
-                      currentUserRole={currentUser?.role}
-                    />
-                  </View>
-                ))
-              ) : (
-                <View style={styles.emptyContainer}>
-                  <Text style={styles.emptyText}>Archive is empty</Text>
-                </View>
-              )}
-            </View>
-          </View>
-        )}
+        <ArchiveModal
+          visible={isArchiveModalOpen}
+          onClose={() => setIsArchiveModalOpen(false)}
+          initialCategory={archiveInitialCategory}
+          patients={patients}
+          onDelete={(id) => setPatients(prev => prev.filter(p => p.id !== id))}
+          onToggleComplete={toggleComplete}
+          onReaddToWaitlist={handleReaddToWaitlist}
+          currentUserRole={currentUser?.role}
+        />
 
         {view === 'settings' && (
           <View style={styles.settingsContainer}>
@@ -1128,21 +1202,27 @@ export default function App() {
             {/* Statistics */}
             <View style={styles.statsCard}>
               <Text style={styles.statsHeader}>Surgeon Performance Statistics</Text>
-              {getSurgeonStats().map(s => (
-                <View key={s.name} style={styles.surgeonStatRow}>
-                  <View style={styles.surgeonStatInfo}>
-                    <Text style={styles.surgeonStatName}>{s.name}</Text>
-                  </View>
-                  <View style={styles.surgeonStatCounts}>
-                    <View style={styles.statBadgeScheduled}>
-                      <Text style={styles.statBadgeText}>Scheduled: {s.scheduled}</Text>
+              {getSurgeonStats().length > 0 ? (
+                getSurgeonStats().map(s => (
+                  <View key={s.name} style={styles.surgeonStatRow}>
+                    <View style={styles.surgeonStatInfo}>
+                      <Text style={styles.surgeonStatName}>{s.name}</Text>
                     </View>
-                    <View style={styles.statBadgeDone}>
-                      <Text style={styles.statBadgeText}>Done: {s.done}</Text>
+                    <View style={styles.surgeonStatCounts}>
+                      <View style={styles.statBadgeScheduled}>
+                        <Text style={styles.statBadgeText}>Scheduled: {s.scheduled}</Text>
+                      </View>
+                      <View style={styles.statBadgeDone}>
+                        <Text style={styles.statBadgeText}>Done: {s.done}</Text>
+                      </View>
                     </View>
                   </View>
-                </View>
-              ))}
+                ))
+              ) : (
+                <Text style={{ color: '#94a3b8', fontSize: 13, fontStyle: 'italic', textAlign: 'center', marginVertical: 12 }}>
+                  No residents or consultants registered yet.
+                </Text>
+              )}
 
               {currentUser.role === 'admin' && (
                 <View style={styles.adminStatsSection}>
@@ -1190,21 +1270,11 @@ export default function App() {
           </View>
         )}
 
-         {view === 'admin' && (
-          <AdminDashboard 
-            patients={patients} 
-            messages={messages}
-            isDarkMode={isDarkMode}
-            onSendMessage={handleSendMessage} 
-            onApprovePatient={handleApprovePatient}
-            onRejectPatient={handleRejectPatient}
-            onDeleteMessage={handleDeleteMessage}
-          />
-        )}
+
       </ScrollView>
 
       {/* Navigation bottom bar */}
-      <MobileNav view={view} setView={setView} />
+      <MobileNav view={view} setView={setView} currentUserRole={currentUser?.role} />
 
       {/* Modals & Bottom sheets */}
        {isFormOpen && (
@@ -1215,6 +1285,9 @@ export default function App() {
           initialData={editingPatient} 
           currentUserRole={currentUser?.role}
           existingPatients={patients}
+          surgeons={users.length > 0 
+            ? users.filter(u => u.role !== 'admin').map(u => u.name.startsWith('Dr. ') ? u.name : `Dr. ${u.name}`)
+            : ['Dr. Resident', 'Dr. Consultant']}
         />
       )}
 
@@ -1262,6 +1335,7 @@ export default function App() {
                     onChangeText={setEditName}
                     placeholder="Full Name"
                     placeholderTextColor="#475569"
+                    autoCapitalize="words"
                   />
                 </View>
 
@@ -1360,7 +1434,7 @@ export default function App() {
       {selectedDate && (
         <DayDetailModal 
           date={selectedDate} 
-          patients={patients.filter(p => p.category === 'Surgical' && p.appointmentDate && isSameDay(new Date(p.appointmentDate), selectedDate))} 
+          patients={patients.filter(p => p.appointmentDate && isSameDay(new Date(p.appointmentDate), selectedDate))} 
           onClose={() => setSelectedDate(null)} 
           onAdd={(date) => { setEditingPatient({ appointmentDate: date } as Patient); setIsFormOpen(true); setSelectedDate(null); }} 
           onPatientClick={(p) => { setEditingPatient(p); setIsFormOpen(true); setSelectedDate(null); }} 
@@ -1379,6 +1453,37 @@ export default function App() {
         </TouchableOpacity>
       )}
     </SafeAreaView>
+  );
+}
+
+const tokenCache = {
+  async getToken(key: string) {
+    try {
+      const item = await SecureStore.getItemAsync(key);
+      return item;
+    } catch {
+      await SecureStore.deleteItemAsync(key);
+      return null;
+    }
+  },
+  async saveToken(key: string, value: string) {
+    try {
+      return SecureStore.setItemAsync(key, value);
+    } catch {
+      return;
+    }
+  },
+};
+
+const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!;
+
+export default function App() {
+  return (
+    <ClerkProvider tokenCache={tokenCache} publishableKey={publishableKey}>
+      <ClerkLoaded>
+        <MainApp />
+      </ClerkLoaded>
+    </ClerkProvider>
   );
 }
 
