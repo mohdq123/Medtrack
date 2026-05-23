@@ -1,13 +1,50 @@
 import { Patient, AdminMessage } from '../types';
 import { BackendService } from './BackendService';
 import { isAfter, subDays, startOfDay, setHours, setMinutes, isBefore, format } from 'date-fns';
+import * as Notifications from 'expo-notifications';
+
+// Configure notification handler
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 export const NotificationService = {
   requestPermission: async () => {
-    // In mobile, we can request native push permissions if needed.
-    // For this implementation, we will log warnings and display local alerts
-    // and sync alerts directly into the shared database messages panel.
-    return true;
+    try {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+      }
+      return finalStatus === 'granted';
+    } catch (error) {
+      console.error("Error requesting notifications permission:", error);
+      return false;
+    }
+  },
+
+  triggerLocalNotification: async (msg: AdminMessage) => {
+    try {
+      const isVoice = msg.type === 'voice';
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: isVoice ? "New Voice Broadcast 🎙️" : `Announcement from ${msg.sender} 📣`,
+          body: msg.content,
+          sound: true,
+          data: { id: msg.id, type: msg.type },
+        },
+        trigger: null, // trigger immediately
+      });
+    } catch (error) {
+      console.error("Failed to trigger local notification:", error);
+    }
   },
 
   checkAndTriggerReminders: async (

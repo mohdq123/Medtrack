@@ -99,7 +99,9 @@ import {
   Volume2,
   Bell,
   Camera,
-  X
+  X,
+  Play,
+  Pause
 } from 'lucide-react-native';
 import { isSameDay, format, isSunday, nextSunday, startOfDay } from 'date-fns';
 
@@ -107,6 +109,8 @@ import { Patient, User, AdminMessage } from './src/types';
 import { BackendService } from './src/services/BackendService';
 import { NotificationService } from './src/services/NotificationService';
 import { getDbUrl, testConnectionAndInit } from './src/services/database';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
+import * as Notifications from 'expo-notifications';
 
 // Import Components
 import Calendar from './src/components/Calendar';
@@ -119,6 +123,271 @@ import Login from './src/components/Login';
 import MobileNav from './src/components/MobileNav';
 import ChangePasswordModal from './src/components/ChangePasswordModal';
 import DatabaseConfig from './src/components/DatabaseConfig';
+
+const formatAudioDuration = (seconds: number) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+};
+
+interface VoiceMessageComponentProps {
+  message: AdminMessage;
+  isDarkMode: boolean;
+  autoPlayMessageId?: string | null;
+  onClearAutoPlay?: () => void;
+  onDelete?: (id: string) => void;
+}
+
+function VoiceMessageRow({ message, isDarkMode, autoPlayMessageId, onClearAutoPlay, onDelete }: VoiceMessageComponentProps) {
+  const player = useAudioPlayer({ uri: message.audioUrl });
+  const status = useAudioPlayerStatus(player);
+  const [speed, setSpeed] = useState<1 | 1.5 | 2>(1);
+
+  useEffect(() => {
+    const current = status.currentTime || 0;
+    const duration = message.duration || status.duration || 0;
+    if (!status.playing && duration > 0 && current >= duration - 0.2) {
+      player.seekTo(0);
+    }
+  }, [status.playing, status.currentTime, status.duration, message.duration]);
+
+  useEffect(() => {
+    if (autoPlayMessageId === message.id) {
+      player.play();
+      if (onClearAutoPlay) {
+        onClearAutoPlay();
+      }
+    }
+  }, [autoPlayMessageId, message.id]);
+
+  const handlePlayPause = async () => {
+    if (status.playing) {
+      player.pause();
+    } else {
+      const currentPos = status.currentTime || 0;
+      const totalDur = message.duration || status.duration || 0;
+      if (totalDur > 0 && currentPos >= totalDur - 0.3) {
+        await player.seekTo(0);
+      }
+      player.play();
+    }
+  };
+
+  const handleToggleSpeed = () => {
+    let nextSpeed: 1 | 1.5 | 2 = 1;
+    if (speed === 1) nextSpeed = 1.5;
+    else if (speed === 1.5) nextSpeed = 2;
+    setSpeed(nextSpeed);
+    player.setPlaybackRate(nextSpeed);
+  };
+
+  return (
+    <View style={styles.messageRow}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%' }}>
+        <View style={{ flexDirection: 'row', flex: 1, marginRight: 8 }}>
+          <Volume2 size={16} color={status.playing ? "#818cf8" : "#64748b"} style={{ marginRight: 8, marginTop: 2 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.messageContent}>{message.content}</Text>
+            
+            <View style={voicePlayerStyles.container}>
+              <TouchableOpacity onPress={handlePlayPause} style={voicePlayerStyles.miniPlayBtn}>
+                {status.playing ? <Pause size={10} color="#fff" /> : <Play size={10} color="#fff" />}
+              </TouchableOpacity>
+              
+              <View style={voicePlayerStyles.progressContainer}>
+                <View style={[voicePlayerStyles.progressBarBg, isDarkMode ? voicePlayerStyles.progressBgDark : voicePlayerStyles.progressBgLight]}>
+                  <View 
+                    style={[
+                      voicePlayerStyles.progressBarFill, 
+                      { 
+                        width: `${Math.min(100, ((status.currentTime || 0) / (message.duration || status.duration || 1)) * 100)}%` 
+                      }
+                    ]} 
+                  />
+                </View>
+                <Text style={[voicePlayerStyles.durationText, isDarkMode ? voicePlayerStyles.textDimDark : voicePlayerStyles.textDimLight]}>
+                  {formatAudioDuration(status.currentTime || 0)} / {formatAudioDuration(message.duration || status.duration || 0)}
+                </Text>
+              </View>
+
+              <TouchableOpacity onPress={handleToggleSpeed} style={voicePlayerStyles.speedBtn}>
+                <Text style={voicePlayerStyles.speedBtnText}>{speed}x</Text>
+              </TouchableOpacity>
+            </View>
+            
+            <Text style={styles.messageTime}>{message.sender} • {format(new Date(message.timestamp), 'MMM d, h:mm a')}</Text>
+          </View>
+        </View>
+
+        {onDelete && (
+          <TouchableOpacity onPress={() => onDelete(message.id)} style={{ padding: 4 }}>
+            <X size={14} color="#ef4444" />
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function VoiceMessageCard({ message, isDarkMode, autoPlayMessageId, onClearAutoPlay, onDelete }: VoiceMessageComponentProps) {
+  const player = useAudioPlayer({ uri: message.audioUrl });
+  const status = useAudioPlayerStatus(player);
+  const [speed, setSpeed] = useState<1 | 1.5 | 2>(1);
+
+  useEffect(() => {
+    const current = status.currentTime || 0;
+    const duration = message.duration || status.duration || 0;
+    if (!status.playing && duration > 0 && current >= duration - 0.2) {
+      player.seekTo(0);
+    }
+  }, [status.playing, status.currentTime, status.duration, message.duration]);
+
+  useEffect(() => {
+    if (autoPlayMessageId === message.id) {
+      player.play();
+      if (onClearAutoPlay) {
+        onClearAutoPlay();
+      }
+    }
+  }, [autoPlayMessageId, message.id]);
+
+  const handlePlayPause = async () => {
+    if (status.playing) {
+      player.pause();
+    } else {
+      const currentPos = status.currentTime || 0;
+      const totalDur = message.duration || status.duration || 0;
+      if (totalDur > 0 && currentPos >= totalDur - 0.3) {
+        await player.seekTo(0);
+      }
+      player.play();
+    }
+  };
+
+  const handleToggleSpeed = () => {
+    let nextSpeed: 1 | 1.5 | 2 = 1;
+    if (speed === 1) nextSpeed = 1.5;
+    else if (speed === 1.5) nextSpeed = 2;
+    setSpeed(nextSpeed);
+    player.setPlaybackRate(nextSpeed);
+  };
+
+  return (
+    <View 
+      style={[styles.messageCard, isDarkMode ? styles.messageCardDark : styles.messageCardLight]}
+    >
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Volume2 size={16} color={status.playing ? "#818cf8" : "#64748b"} style={{ marginRight: 8 }} />
+          <Text style={styles.messageSender}>{message.sender}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Text style={styles.messageTimeText}>
+            {format(new Date(message.timestamp), 'MMM d, h:mm a')}
+          </Text>
+          {onDelete && (
+            <TouchableOpacity onPress={() => onDelete(message.id)} style={{ padding: 4 }}>
+              <X size={14} color="#ef4444" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+      <Text style={[styles.messageContentText, isDarkMode ? styles.textWhite : styles.textDark]}>
+        {message.content}
+      </Text>
+      
+      <View style={voicePlayerStyles.container}>
+        <TouchableOpacity onPress={handlePlayPause} style={voicePlayerStyles.miniPlayBtn}>
+          {status.playing ? <Pause size={10} color="#fff" /> : <Play size={10} color="#fff" />}
+        </TouchableOpacity>
+        
+        <View style={voicePlayerStyles.progressContainer}>
+          <View style={[voicePlayerStyles.progressBarBg, isDarkMode ? voicePlayerStyles.progressBgDark : voicePlayerStyles.progressBgLight]}>
+            <View 
+              style={[
+                voicePlayerStyles.progressBarFill, 
+                { 
+                  width: `${Math.min(100, ((status.currentTime || 0) / (message.duration || status.duration || 1)) * 100)}%` 
+                }
+              ]} 
+            />
+          </View>
+          <Text style={[voicePlayerStyles.durationText, isDarkMode ? voicePlayerStyles.textDimDark : voicePlayerStyles.textDimLight]}>
+            {formatAudioDuration(status.currentTime || 0)} / {formatAudioDuration(message.duration || status.duration || 0)}
+          </Text>
+        </View>
+
+        <TouchableOpacity onPress={handleToggleSpeed} style={voicePlayerStyles.speedBtn}>
+          <Text style={voicePlayerStyles.speedBtnText}>{speed}x</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const voicePlayerStyles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    padding: 8,
+    borderRadius: 12,
+    backgroundColor: '#1f2937',
+    gap: 10,
+  },
+  miniPlayBtn: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#6366f1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  progressContainer: {
+    flex: 1,
+    gap: 4,
+  },
+  progressBarBg: {
+    height: 4,
+    borderRadius: 2,
+    width: '100%',
+    overflow: 'hidden',
+  },
+  progressBgDark: {
+    backgroundColor: '#374151',
+  },
+  progressBgLight: {
+    backgroundColor: '#e2e8f0',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#818cf8',
+  },
+  durationText: {
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  textDimDark: {
+    color: '#94a3b8',
+  },
+  textDimLight: {
+    color: '#64748b',
+  },
+  speedBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: '#475569',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 32,
+  },
+  speedBtnText: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+});
 
 const getGreeting = () => {
   const hr = new Date().getHours();
@@ -153,6 +422,8 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
 
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
+  const [isAnnouncementsModalOpen, setIsAnnouncementsModalOpen] = useState(false);
+  const [autoPlayMessageId, setAutoPlayMessageId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editProfilePic, setEditProfilePic] = useState('');
@@ -167,7 +438,7 @@ export default function App() {
       const activeUser = await BackendService.getActiveUser();
       setCurrentUser(activeUser);
       if (activeUser) {
-        setView(activeUser.role === 'admin' ? 'admin' : 'dashboard');
+        setView('dashboard');
       }
 
       const activeTheme = await BackendService.getTheme();
@@ -187,6 +458,33 @@ export default function App() {
   useEffect(() => {
     initData();
     NotificationService.requestPermission();
+    setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch((err: any) => {
+      console.error("Failed to initialize audio mode:", err);
+    });
+
+    // Listen to notification clicks/taps
+    const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response.notification.request.content.data;
+      if (data && typeof data.id === 'string') {
+        setAutoPlayMessageId(data.id);
+        setIsAnnouncementsModalOpen(true);
+      }
+    });
+
+    // Check if app was opened via a notification click
+    Notifications.getLastNotificationResponseAsync().then(response => {
+      if (response) {
+        const data = response.notification.request.content.data;
+        if (data && typeof data.id === 'string') {
+          setAutoPlayMessageId(data.id);
+          setIsAnnouncementsModalOpen(true);
+        }
+      }
+    });
+
+    return () => {
+      responseListener.remove();
+    };
   }, []);
 
   // Poll for surgery/ESWL alerts
@@ -220,6 +518,34 @@ export default function App() {
     return () => clearInterval(pollInterval);
   }, [isLoading, patients]);
 
+  // Poll database for real-time message syncing and notifications
+  useEffect(() => {
+    if (isLoading) return;
+    const pollInterval = setInterval(async () => {
+      try {
+        const freshMessages = await BackendService.getMessages();
+        setMessages(prev => {
+          const localIds = new Set(prev.map(m => m.id));
+          const newMessages = freshMessages.filter(m => !localIds.has(m.id));
+          
+          if (newMessages.length > 0) {
+            newMessages.forEach(msg => {
+              NotificationService.triggerLocalNotification(msg);
+            });
+            return freshMessages;
+          }
+          if (JSON.stringify(freshMessages) !== JSON.stringify(prev)) {
+            return freshMessages;
+          }
+          return prev;
+        });
+      } catch (e) {
+        console.error("Realtime messages poll error:", e);
+      }
+    }, 8000);
+    return () => clearInterval(pollInterval);
+  }, [isLoading]);
+
   // Sync state changes back to database/AsyncStorage
   useEffect(() => {
     if (!isLoading) {
@@ -240,7 +566,7 @@ export default function App() {
   const handleLogin = (user: User) => {
     BackendService.setActiveUser(user);
     setCurrentUser(user);
-    setView(user.role === 'admin' ? 'admin' : 'dashboard');
+    setView('dashboard');
   };
 
   const handleLogout = () => {
@@ -406,9 +732,6 @@ export default function App() {
 
   const getSurgeonStats = () => {
     let surgeons = ['Dr. Admin', 'Dr. Resident', 'Dr. Consultant'];
-    if (currentUser?.role === 'resident') {
-      surgeons = ['Dr. Resident'];
-    }
     return surgeons.map(s => {
       const sPatients = patients.filter(p => {
         if (s === 'Dr. Admin') {
@@ -495,6 +818,14 @@ export default function App() {
     setMessages(prev => [newMsg, ...prev]);
   };
 
+  const handleDeleteMessage = (id: string) => {
+    setMessages(prev => prev.filter(m => m.id !== id));
+  };
+
+  const handleClearAllMessages = () => {
+    setMessages([]);
+  };
+
   // Render Setup if requested
   if (isDbConfigOpen) {
     return (
@@ -568,13 +899,7 @@ export default function App() {
                   )}
                 </View>
                 <TouchableOpacity 
-                  onPress={() => {
-                    if (messages.length > 0) {
-                      Alert.alert("Announcements", messages.map(m => `• ${m.content}`).join('\n\n'));
-                    } else {
-                      Alert.alert("Notifications", "No new announcements.");
-                    }
-                  }}
+                  onPress={() => setIsAnnouncementsModalOpen(true)}
                   style={styles.headerNotificationBell}
                 >
                   <Bell size={18} color="#6366f1" />
@@ -633,19 +958,36 @@ export default function App() {
             {messages.length > 0 && (
               <View style={styles.broadcastBox}>
                 <Text style={styles.broadcastBoxHeader}>Department Announcements</Text>
-                {messages.slice(0, 3).map((m) => (
-                  <View key={m.id} style={styles.messageRow}>
-                    {m.type === 'voice' ? (
-                      <Volume2 size={16} color="#818cf8" style={{ marginRight: 8, marginTop: 2 }} />
-                    ) : (
-                      <View style={styles.bulletDot} />
-                    )}
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.messageContent}>{m.content}</Text>
-                      <Text style={styles.messageTime}>{m.sender} • {format(new Date(m.timestamp), 'MMM d, h:mm a')}</Text>
+                {messages.slice(0, 3).map((m) => {
+                  if (m.type === 'voice' && m.audioUrl) {
+                    return (
+                      <VoiceMessageRow 
+                        key={m.id} 
+                        message={m} 
+                        isDarkMode={isDarkMode} 
+                        autoPlayMessageId={autoPlayMessageId}
+                        onClearAutoPlay={() => setAutoPlayMessageId(null)}
+                        onDelete={handleDeleteMessage}
+                      />
+                    );
+                  }
+                  return (
+                    <View key={m.id} style={styles.messageRow}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%' }}>
+                        <View style={{ flexDirection: 'row', flex: 1, marginRight: 8 }}>
+                          <View style={styles.bulletDot} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.messageContent}>{m.content}</Text>
+                            <Text style={styles.messageTime}>{m.sender} • {format(new Date(m.timestamp), 'MMM d, h:mm a')}</Text>
+                          </View>
+                        </View>
+                        <TouchableOpacity onPress={() => handleDeleteMessage(m.id)} style={{ padding: 4 }}>
+                          <X size={14} color="#ef4444" />
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             )}
 
@@ -778,9 +1120,6 @@ export default function App() {
               {currentUser.phoneNumber ? (
                 <Text style={styles.profilePhone}>{currentUser.phoneNumber}</Text>
               ) : null}
-              <View style={styles.roleTag}>
-                <Text style={styles.roleTagText}>{currentUser.role}</Text>
-              </View>
               <TouchableOpacity onPress={openEditProfile} style={styles.editProfileLink}>
                 <Text style={styles.editProfileLinkText}>Edit Profile</Text>
               </TouchableOpacity>
@@ -837,13 +1176,6 @@ export default function App() {
                 <Text style={styles.settingsOptionText}>Change Account Password</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
-                onPress={() => setIsDbConfigOpen(true)}
-                style={styles.settingsOptionBtn}
-              >
-                <Database size={18} color="#10b981" style={{ marginRight: 12 }} />
-                <Text style={styles.settingsOptionText}>Database Sync Configuration</Text>
-              </TouchableOpacity>
 
               <TouchableOpacity 
                 onPress={handleLogout}
@@ -861,15 +1193,18 @@ export default function App() {
          {view === 'admin' && (
           <AdminDashboard 
             patients={patients} 
+            messages={messages}
+            isDarkMode={isDarkMode}
             onSendMessage={handleSendMessage} 
             onApprovePatient={handleApprovePatient}
             onRejectPatient={handleRejectPatient}
+            onDeleteMessage={handleDeleteMessage}
           />
         )}
       </ScrollView>
 
       {/* Navigation bottom bar */}
-      <MobileNav view={view} setView={setView} role={currentUser.role} />
+      <MobileNav view={view} setView={setView} />
 
       {/* Modals & Bottom sheets */}
        {isFormOpen && (
@@ -956,6 +1291,72 @@ export default function App() {
         </Modal>
       )}
 
+      {isAnnouncementsModalOpen && (
+        <Modal visible={isAnnouncementsModalOpen} animationType="slide" transparent>
+          <SafeAreaView style={styles.modalOverlay}>
+            <View style={styles.modalContainer}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Notifications</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  {messages.length > 0 && (
+                    <TouchableOpacity onPress={handleClearAllMessages} style={{ padding: 4 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#ef4444' }}>Clear All</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity onPress={() => setIsAnnouncementsModalOpen(false)} style={styles.closeBtn}>
+                    <X size={20} color="#94a3b8" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+              
+              <ScrollView contentContainerStyle={styles.modalScrollContent}>
+                {messages.length > 0 ? (
+                  messages.map((m) => {
+                    if (m.type === 'voice' && m.audioUrl) {
+                      return (
+                        <VoiceMessageCard 
+                          key={m.id} 
+                          message={m} 
+                          isDarkMode={isDarkMode} 
+                          autoPlayMessageId={autoPlayMessageId}
+                          onClearAutoPlay={() => setAutoPlayMessageId(null)}
+                          onDelete={handleDeleteMessage}
+                        />
+                      );
+                    }
+                    return (
+                      <View key={m.id} style={[styles.messageCard, isDarkMode ? styles.messageCardDark : styles.messageCardLight]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Bell size={16} color="#6366f1" style={{ marginRight: 8 }} />
+                            <Text style={styles.messageSender}>{m.sender}</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <Text style={styles.messageTimeText}>
+                              {format(new Date(m.timestamp), 'MMM d, h:mm a')}
+                            </Text>
+                            <TouchableOpacity onPress={() => handleDeleteMessage(m.id)} style={{ padding: 4 }}>
+                              <X size={14} color="#ef4444" />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                        <Text style={[styles.messageContentText, isDarkMode ? styles.textWhite : styles.textDark]}>
+                          {m.content}
+                        </Text>
+                      </View>
+                    );
+                  })
+                ) : (
+                  <View style={styles.emptyContainer}>
+                    <Text style={styles.emptyText}>No announcements yet.</Text>
+                  </View>
+                )}
+              </ScrollView>
+            </View>
+          </SafeAreaView>
+        </Modal>
+      )}
+
       {selectedDate && (
         <DayDetailModal 
           date={selectedDate} 
@@ -966,8 +1367,7 @@ export default function App() {
         />
       )}
       {/* Floating Action Button (FAB) */}
-      {view === 'dashboard' && 
-       (currentUser.role === 'resident' || currentUser.role === 'consultant') && (
+      {view === 'dashboard' && (
         <TouchableOpacity 
           onPress={() => {
             setEditingPatient({} as Patient);
@@ -1579,5 +1979,38 @@ const styles = StyleSheet.create({
     padding: 14,
     color: '#fff',
     fontSize: 14,
+  },
+  messageCard: {
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+  },
+  messageCardDark: {
+    backgroundColor: '#111827',
+    borderColor: '#1f2937',
+  },
+  messageCardLight: {
+    backgroundColor: '#fff',
+    borderColor: '#e2e8f0',
+  },
+  messageSender: {
+    color: '#818cf8',
+    fontSize: 12,
+    fontWeight: '900',
+    marginRight: 8,
+  },
+  messageTimeText: {
+    color: '#64748b',
+    fontSize: 10,
+    fontWeight: '700',
+    marginLeft: 'auto',
+  },
+  messageContentText: {
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+    marginTop: 4,
+    marginBottom: 4,
   },
 });

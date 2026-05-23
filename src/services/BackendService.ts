@@ -31,14 +31,15 @@ export const BackendService = {
     }
     
     try {
-      const rows = await sql`SELECT email, role, name, password, phone_number, profile_picture FROM users`;
+      const rows = await sql`SELECT email, role, name, password, phone_number, profile_picture, confirmed FROM users`;
       return rows.map((r: any) => ({
         email: r.email,
         role: r.role,
         name: r.name,
         password: r.password,
         phoneNumber: r.phone_number || undefined,
-        profilePicture: r.profile_picture || undefined
+        profilePicture: r.profile_picture || undefined,
+        confirmed: r.confirmed !== null ? r.confirmed : true
       }));
     } catch (e) {
       console.error("Error loading users from Neon:", e);
@@ -47,13 +48,14 @@ export const BackendService = {
     }
   },
 
-  createOrGetUser: async (email: string, name: string, role: UserRole, password?: string): Promise<User> => {
+  createOrGetUser: async (email: string, name: string, role: UserRole, password?: string, confirmed?: boolean): Promise<User> => {
+    const isConf = confirmed !== undefined ? confirmed : true;
     const sql = await getSqlClient();
     if (!sql) {
       const users = await BackendService.getUsers();
       let user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
       if (!user) {
-        user = { email, name, role, password: password || 'google-auth' };
+        user = { email, name, role, password: password || 'google-auth', confirmed: isConf };
         const updated = [...users, user];
         await AsyncStorage.setItem(STORAGE_KEYS.USERS_FALLBACK, JSON.stringify(updated));
       }
@@ -61,7 +63,7 @@ export const BackendService = {
     }
     
     try {
-      const rows = await sql`SELECT email, role, name, password, phone_number, profile_picture FROM users WHERE email = ${email}`;
+      const rows = await sql`SELECT email, role, name, password, phone_number, profile_picture, confirmed FROM users WHERE email = ${email}`;
       if (rows.length > 0) {
         return {
           email: rows[0].email,
@@ -69,19 +71,20 @@ export const BackendService = {
           name: rows[0].name,
           password: rows[0].password,
           phoneNumber: rows[0].phone_number || undefined,
-          profilePicture: rows[0].profile_picture || undefined
+          profilePicture: rows[0].profile_picture || undefined,
+          confirmed: rows[0].confirmed !== null ? rows[0].confirmed : true
         };
       }
       
       const pw = password || 'google-auth';
-      await sql`INSERT INTO users (email, password, role, name) VALUES (${email}, ${pw}, ${role}, ${name})`;
-      return { email, role, name, password: pw };
+      await sql`INSERT INTO users (email, password, role, name, confirmed) VALUES (${email}, ${pw}, ${role}, ${name}, ${isConf})`;
+      return { email, role, name, password: pw, confirmed: isConf };
     } catch (e) {
       console.error("Error creating/getting user in Neon:", e);
       const users = await BackendService.getUsers();
       let user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
       if (!user) {
-        user = { email, name, role, password: password || 'google-auth' };
+        user = { email, name, role, password: password || 'google-auth', confirmed: isConf };
         const updated = [...users, user];
         await AsyncStorage.setItem(STORAGE_KEYS.USERS_FALLBACK, JSON.stringify(updated));
       }
@@ -133,6 +136,24 @@ export const BackendService = {
       const targetUser = updated.find(u => u.email === email)!;
       await BackendService.setActiveUser(targetUser);
       return targetUser;
+    }
+  },
+
+  confirmUserEmail: async (email: string): Promise<void> => {
+    const sql = await getSqlClient();
+    if (!sql) {
+      const users = await BackendService.getUsers();
+      const updated = users.map(u => u.email.toLowerCase() === email.toLowerCase() ? { ...u, confirmed: true } : u);
+      await AsyncStorage.setItem(STORAGE_KEYS.USERS_FALLBACK, JSON.stringify(updated));
+      return;
+    }
+    try {
+      await sql`UPDATE users SET confirmed = TRUE WHERE email = ${email}`;
+    } catch (e) {
+      console.error("Error confirming user in Neon:", e);
+      const users = await BackendService.getUsers();
+      const updated = users.map(u => u.email.toLowerCase() === email.toLowerCase() ? { ...u, confirmed: true } : u);
+      await AsyncStorage.setItem(STORAGE_KEYS.USERS_FALLBACK, JSON.stringify(updated));
     }
   },
 
@@ -284,7 +305,9 @@ export const BackendService = {
         type: r.type,
         content: r.content,
         timestamp: new Date(r.timestamp),
-        sender: r.sender
+        sender: r.sender,
+        audioUrl: r.audio_url || undefined,
+        duration: r.duration ? Number(r.duration) : undefined
       })).sort((a: any, b: any) => b.timestamp.getTime() - a.timestamp.getTime());
     } catch (e) {
       console.error("Error loading messages from Neon:", e);
@@ -307,9 +330,15 @@ export const BackendService = {
     try {
       for (const m of messages) {
         await sql`
-          INSERT INTO messages (id, type, content, timestamp, sender)
-          VALUES (${m.id}, ${m.type}, ${m.content}, ${new Date(m.timestamp).toISOString()}, ${m.sender})
-          ON CONFLICT (id) DO NOTHING
+          INSERT INTO messages (id, type, content, timestamp, sender, audio_url, duration)
+          VALUES (${m.id}, ${m.type}, ${m.content}, ${new Date(m.timestamp).toISOString()}, ${m.sender}, ${m.audioUrl || null}, ${m.duration || null})
+          ON CONFLICT (id) DO UPDATE SET
+            type = EXCLUDED.type,
+            content = EXCLUDED.content,
+            timestamp = EXCLUDED.timestamp,
+            sender = EXCLUDED.sender,
+            audio_url = EXCLUDED.audio_url,
+            duration = EXCLUDED.duration
         `;
       }
       const ids = messages.map(m => m.id);

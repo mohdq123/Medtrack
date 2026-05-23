@@ -129,5 +129,39 @@ export const R2Service = {
   uploadImage: async (base64Data: string, type: string): Promise<string | null> => {
     const ext = type.toLowerCase() === 'ct' ? 'jpg' : type.toLowerCase();
     return R2Service.uploadFile(base64Data, ext, 'radiology', 'image/jpeg');
-  }
+  },
+
+  /**
+   * Uploads a voice recording (m4a/mp3) to the broadcasts/ folder in Cloudflare R2.
+   * @param base64Data Base64 audio data
+   * @param extension File extension ('m4a' | '3gp')
+   * @returns Public URL of the stored audio file
+   */
+  uploadAudio: async (base64Data: string, extension: string = 'm4a'): Promise<string | null> => {
+    const s3 = getS3Client();
+    const config = getR2Config();
+
+    if (!s3 || !config.bucketName || !config.publicUrl) {
+      throw new Error('Cloudflare R2 credentials or configuration is missing in .env');
+    }
+
+    const binaryData = base64ToUint8Array(base64Data);
+    const randomId = Math.random().toString(36).substring(2, 11);
+    const fileKey = `broadcasts/${Date.now()}-${randomId}.${extension.toLowerCase()}`;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: config.bucketName,
+        Key: fileKey,
+        Body: binaryData,
+        ContentType: extension === 'wav' ? 'audio/wav' : (extension === 'm4a' ? 'audio/mp4' : 'audio/3gpp'),
+      })
+    );
+
+    const cleanPublicUrlBase = config.publicUrl.endsWith('/')
+      ? config.publicUrl.slice(0, -1)
+      : config.publicUrl;
+
+    return `${cleanPublicUrlBase}/${fileKey}`;
+  },
 };

@@ -25,22 +25,26 @@ interface LoginProps {
 
 export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
   const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [dbConnected, setDbConnected] = useState(false);
 
+  // Authentication mode
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [unconfirmedEmail, setUnconfirmedEmail] = useState<string | null>(null);
+
   // Google Modal states
   const [googleModalVisible, setGoogleModalVisible] = useState(false);
   const [customGoogleEmail, setCustomGoogleEmail] = useState('');
   const [customGoogleName, setCustomGoogleName] = useState('');
-  const [customGoogleRole, setCustomGoogleRole] = useState<UserRole>('resident');
   const [showCustomGoogleForm, setShowCustomGoogleForm] = useState(false);
 
   const mockGoogleAccounts = [
-    { email: 'admin.google@medtrack.com', name: 'Dr. Administrator', role: 'admin' as UserRole },
-    { email: 'resident.google@medtrack.com', name: 'Dr. Resident', role: 'resident' as UserRole },
-    { email: 'consultant.google@medtrack.com', name: 'Dr. Consultant', role: 'consultant' as UserRole },
+    { email: 'admin.google@medtrack.com', name: 'Dr. Administrator' },
+    { email: 'resident.google@medtrack.com', name: 'Dr. Resident' },
+    { email: 'consultant.google@medtrack.com', name: 'Dr. Consultant' },
   ];
 
   useEffect(() => {
@@ -65,9 +69,13 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
       const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase() && u.password === password);
 
       if (user) {
-        onLogin(user);
+        if (user.confirmed === false) {
+          setUnconfirmedEmail(user.email);
+        } else {
+          onLogin(user);
+        }
       } else {
-        setError("Invalid email or password. Please use approved credentials.");
+        setError("Invalid email or password. Please sign up or check credentials.");
       }
     } catch (err) {
       console.error(err);
@@ -77,13 +85,68 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
     }
   };
 
-  const handleGoogleSelect = async (gEmail: string, gName: string, gRole: UserRole) => {
+  const handleSignUp = async () => {
+    if (!email.trim() || !password.trim() || !name.trim()) {
+      setError("Please fill in all fields (Full Name, Email, Password).");
+      return;
+    }
+    if (!email.includes('@') || !email.includes('.')) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const users = await BackendService.getUsers();
+      const existing = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+      if (existing) {
+        setError("Email already registered. Please sign in instead.");
+        setLoading(false);
+        return;
+      }
+
+      await BackendService.createOrGetUser(email.trim().toLowerCase(), name.trim(), 'admin', password, false);
+      setUnconfirmedEmail(email.trim().toLowerCase());
+      setAuthMode('signin');
+    } catch (err) {
+      console.error(err);
+      setError("An error occurred during sign up.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSelect = async (gEmail: string, gName: string) => {
     setLoading(true);
     setGoogleModalVisible(false);
     setError(null);
     try {
-      const user = await BackendService.createOrGetUser(gEmail, gName, gRole);
-      onLogin(user);
+      const users = await BackendService.getUsers();
+      const existing = users.find(u => u.email.toLowerCase() === gEmail.toLowerCase());
+
+      if (authMode === 'signup') {
+        if (existing) {
+          setError("Google account email is already registered. Please sign in.");
+          setLoading(false);
+          return;
+        }
+        await BackendService.createOrGetUser(gEmail, gName, 'admin', 'google-auth', false);
+        setUnconfirmedEmail(gEmail);
+      } else {
+        // Sign In mode
+        if (!existing) {
+          setError("This Google account is not registered. Please switch to Sign Up first.");
+          setLoading(false);
+          return;
+        }
+        if (existing.confirmed === false) {
+          setUnconfirmedEmail(existing.email);
+        } else {
+          onLogin(existing);
+        }
+      }
     } catch (err) {
       console.error(err);
       setError("An error occurred during Google authentication.");
@@ -103,8 +166,7 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
     }
     await handleGoogleSelect(
       customGoogleEmail.trim().toLowerCase(),
-      customGoogleName.trim(),
-      customGoogleRole
+      customGoogleName.trim()
     );
   };
 
@@ -134,9 +196,41 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
 
           {/* Login Card */}
           <View style={styles.card}>
+            {/* Mode switch */}
+            <View style={{ flexDirection: 'row', marginBottom: 20, backgroundColor: '#1f2937', borderRadius: 14, padding: 4 }}>
+              <TouchableOpacity 
+                style={[{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 }, authMode === 'signin' && { backgroundColor: '#4f46e5' }]}
+                onPress={() => { setAuthMode('signin'); setError(null); }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Sign In</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 }, authMode === 'signup' && { backgroundColor: '#4f46e5' }]}
+                onPress={() => { setAuthMode('signup'); setError(null); }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Sign Up</Text>
+              </TouchableOpacity>
+            </View>
+
+            {authMode === 'signup' && (
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Full Name</Text>
+                <View style={styles.inputWrapper}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Dr. John Doe"
+                    placeholderTextColor="#475569"
+                    value={name}
+                    onChangeText={setName}
+                    autoCorrect={false}
+                  />
+                </View>
+              </View>
+            )}
+
             {/* Email field */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Approved Email</Text>
+              <Text style={styles.label}>Email Address</Text>
               <View style={styles.inputWrapper}>
                 <Mail size={18} color="#94a3b8" style={styles.inputIcon} />
                 <TextInput
@@ -179,7 +273,7 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
 
             <TouchableOpacity 
               style={styles.loginButton} 
-              onPress={handleLogin}
+              onPress={authMode === 'signin' ? handleLogin : handleSignUp}
               disabled={loading}
             >
               {loading ? (
@@ -187,7 +281,9 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
               ) : (
                 <>
                   <LogIn size={20} color="#fff" style={{ marginRight: 8 }} />
-                  <Text style={styles.loginButtonText}>Authorize Access</Text>
+                  <Text style={styles.loginButtonText}>
+                    {authMode === 'signin' ? 'Authorize Access' : 'Create Account'}
+                  </Text>
                 </>
               )}
             </TouchableOpacity>
@@ -208,20 +304,16 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
               <View style={styles.googleIconContainer}>
                 <Text style={styles.googleIconText}>G</Text>
               </View>
-              <Text style={styles.googleButtonText}>Continue with Google</Text>
+              <Text style={styles.googleButtonText}>
+                {authMode === 'signin' ? 'Continue with Google' : 'Sign Up with Google'}
+              </Text>
             </TouchableOpacity>
 
-            {/* Demo Credentials */}
+            {/* Demo Credentials description */}
             <View style={styles.credentialsBox}>
-              <Text style={styles.credentialsHeader}>Demo Credentials</Text>
+              <Text style={styles.credentialsHeader}>Demo & Registration Information</Text>
               <Text style={styles.credentialText}>
-                Resident: <Text style={styles.credentialHighlight}>resident@medtrack.com</Text> / <Text style={styles.credentialHighlight}>res</Text>
-              </Text>
-              <Text style={styles.credentialText}>
-                Consultant: <Text style={styles.credentialHighlight}>consultant@medtrack.com</Text> / <Text style={styles.credentialHighlight}>con</Text>
-              </Text>
-              <Text style={styles.credentialText}>
-                Admin: <Text style={styles.credentialHighlight}>admin@medtrack.com</Text> / <Text style={styles.credentialHighlight}>admin</Text>
+                Sign up with any new email/password or mock Google accounts to create an account, verify via confirmation simulator, and sign in.
               </Text>
             </View>
           </View>
@@ -229,6 +321,45 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
           <Text style={styles.footerText}>Authorized Hospital Personnel Only</Text>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Verification Simulation Overlay Modal */}
+      {unconfirmedEmail && (
+        <Modal transparent animationType="fade" visible={!!unconfirmedEmail}>
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { alignItems: 'center', padding: 28 }]}>
+              <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(99, 102, 241, 0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+                <Mail size={32} color="#6366f1" />
+              </View>
+              <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900', textAlign: 'center', marginBottom: 8 }}>
+                Confirm Your Email
+              </Text>
+              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', lineHeight: 20, marginBottom: 24 }}>
+                We've sent a verification link to{"\n"}
+                <Text style={{ color: '#fff', fontWeight: '800' }}>{unconfirmedEmail}</Text>.{"\n"}
+                Please confirm it to activate your account.
+              </Text>
+              
+              <TouchableOpacity 
+                style={{ width: '100%', backgroundColor: '#10b981', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginBottom: 12 }}
+                onPress={async () => {
+                  await BackendService.confirmUserEmail(unconfirmedEmail);
+                  setUnconfirmedEmail(null);
+                  Alert.alert("Verified", "Your email has been confirmed! You can now sign in.");
+                }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Simulate Email Confirmation Link</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={{ width: '100%', paddingVertical: 12, alignItems: 'center' }}
+                onPress={() => setUnconfirmedEmail(null)}
+              >
+                <Text style={{ color: '#64748b', fontWeight: '700', fontSize: 13 }}>Cancel / Back</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
 
       {/* Google Sign-In Mock Modal */}
       <Modal
@@ -248,7 +379,9 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                   <View style={styles.googleIconHeaderContainer}>
                     <Text style={styles.googleIconHeader}>G</Text>
                   </View>
-                  <Text style={styles.modalTitle}>Sign in with Google</Text>
+                  <Text style={styles.modalTitle}>
+                    {authMode === 'signin' ? 'Sign in with Google' : 'Sign up with Google'}
+                  </Text>
                   <Text style={styles.modalSubtitle}>to continue to MedTrack</Text>
                 </View>
 
@@ -259,7 +392,7 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                         <TouchableOpacity
                           key={account.email}
                           style={styles.accountButton}
-                          onPress={() => handleGoogleSelect(account.email, account.name, account.role)}
+                          onPress={() => handleGoogleSelect(account.email, account.name)}
                         >
                           <View style={styles.accountAvatar}>
                             <Text style={styles.accountAvatarText}>{account.name.charAt(0)}</Text>
@@ -267,9 +400,6 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                           <View style={styles.accountInfo}>
                             <Text style={styles.accountName}>{account.name}</Text>
                             <Text style={styles.accountEmail}>{account.email}</Text>
-                          </View>
-                          <View style={styles.accountRoleTag}>
-                            <Text style={styles.accountRoleText}>{account.role}</Text>
                           </View>
                         </TouchableOpacity>
                       ))}
@@ -315,29 +445,6 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                       </View>
                     </View>
 
-                    <View style={styles.inputGroup}>
-                      <Text style={styles.roleSelectorLabel}>Assigned Role</Text>
-                      <View style={styles.roleOptionsRow}>
-                        {(['resident', 'consultant', 'admin'] as UserRole[]).map((r) => (
-                          <TouchableOpacity
-                            key={r}
-                            style={[
-                              styles.roleOptionBtn,
-                              customGoogleRole === r && styles.roleOptionBtnActive
-                            ]}
-                            onPress={() => setCustomGoogleRole(r)}
-                          >
-                            <Text style={[
-                              styles.roleOptionText,
-                              customGoogleRole === r && styles.roleOptionTextActive
-                            ]}>
-                              {r}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    </View>
-
                     <View style={styles.modalActions}>
                       <TouchableOpacity 
                         style={styles.modalCancelBtn}
@@ -349,7 +456,9 @@ export default function Login({ onLogin, onOpenDatabaseConfig }: LoginProps) {
                         style={styles.modalSubmitBtn}
                         onPress={handleCustomGoogleSubmit}
                       >
-                        <Text style={styles.modalSubmitBtnText}>Sign In</Text>
+                        <Text style={styles.modalSubmitBtnText}>
+                          {authMode === 'signin' ? 'Sign In' : 'Sign Up'}
+                        </Text>
                       </TouchableOpacity>
                     </View>
                   </View>

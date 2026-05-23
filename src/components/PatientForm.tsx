@@ -11,7 +11,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
-  ActivityIndicator
+  ActivityIndicator,
+  Linking
 } from 'react-native';
 import { Text } from './PoppinsText';
 import { X, Calendar as CalendarIcon, User, Phone, Info, Stethoscope, Scissors, Camera, Trash2, Plus, FlaskConical, AlertTriangle, Image as ImageIcon, ChevronLeft, ChevronRight, Check, FileText } from 'lucide-react-native';
@@ -741,10 +742,8 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
                             borderRadius: 12
                           }}
                           onPress={() => {
-                            import('react-native').then(({ Linking }) => {
-                              Linking.openURL(img.imageData).catch(err => {
-                                Alert.alert('Error', 'Could not open PDF file.');
-                              });
+                            Linking.openURL(img.imageData).catch(err => {
+                              Alert.alert('Error', 'Could not open PDF file.');
                             });
                           }}
                         >
@@ -830,10 +829,8 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
                   <TouchableOpacity 
                     style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
                     onPress={() => {
-                      import('react-native').then(({ Linking }) => {
-                        Linking.openURL(formData.labPdfUrl!).catch(err => {
-                          Alert.alert('Error', 'Could not open PDF file.');
-                        });
+                      Linking.openURL(formData.labPdfUrl!).catch(err => {
+                        Alert.alert('Error', 'Could not open PDF file.');
                       });
                     }}
                   >
@@ -1034,10 +1031,8 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
                             onPress={() => {
                               const url = formData.imaging?.[fullscreenImageIndex]?.imageData;
                               if (url) {
-                                import('react-native').then(({ Linking }) => {
-                                  Linking.openURL(url).catch(err => {
-                                    Alert.alert('Error', 'Could not open PDF file.');
-                                  });
+                                Linking.openURL(url).catch(err => {
+                                  Alert.alert('Error', 'Could not open PDF file.');
                                 });
                               }
                             }}

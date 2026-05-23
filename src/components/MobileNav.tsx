@@ -1,42 +1,22 @@
 import React from 'react';
 import { View, TouchableOpacity, StyleSheet } from 'react-native';
-import { LayoutDashboard, Scissors, Stethoscope, Calendar, Archive, Settings, User } from 'lucide-react-native';
+import { LayoutDashboard, Scissors, Stethoscope, Calendar, Settings, User } from 'lucide-react-native';
 import { Text } from './PoppinsText';
-import { UserRole } from '../types';
 
 interface MobileNavProps {
   view: string;
   setView: (view: any) => void;
-  role: UserRole;
 }
 
-export default function MobileNav({ view, setView, role }: MobileNavProps) {
+export default function MobileNav({ view, setView }: MobileNavProps) {
   return (
     <View style={styles.navBar}>
-      {role === 'admin' ? (
-        <>
-          <NavItem active={view === 'admin'} icon={<LayoutDashboard size={20} />} label="Stats" onClick={() => setView('admin')} />
-          <NavItem active={view === 'calendar'} icon={<Calendar size={20} />} label="Theater" onClick={() => setView('calendar')} />
-          <NavItem active={view === 'settings'} icon={<Settings size={20} />} label="Settings" onClick={() => setView('settings')} />
-        </>
-      ) : role === 'consultant' ? (
-        <>
-          <NavItem active={view === 'dashboard'} icon={<LayoutDashboard size={20} />} label="Today" onClick={() => setView('dashboard')} />
-          <NavItem active={view === 'surgical'} icon={<Scissors size={20} />} label="Surgery" onClick={() => setView('surgical')} />
-          <NavItem active={view === 'eswl'} icon={<Stethoscope size={20} />} label="ESWL" onClick={() => setView('eswl')} />
-          <NavItem active={view === 'calendar'} icon={<Calendar size={20} />} label="Theater" onClick={() => setView('calendar')} />
-          <NavItem active={view === 'archive'} icon={<Archive size={20} />} label="History" onClick={() => setView('archive')} />
-          <NavItem active={view === 'settings'} icon={<User size={20} />} label="Me" onClick={() => setView('settings')} />
-        </>
-      ) : (
-        <>
-          <NavItem active={view === 'dashboard'} icon={<LayoutDashboard size={20} />} label="Today" onClick={() => setView('dashboard')} />
-          <NavItem active={view === 'surgical'} icon={<Scissors size={20} />} label="Surgery" onClick={() => setView('surgical')} />
-          <NavItem active={view === 'eswl'} icon={<Stethoscope size={20} />} label="ESWL" onClick={() => setView('eswl')} />
-          <NavItem active={view === 'archive'} icon={<Archive size={20} />} label="History" onClick={() => setView('archive')} />
-          <NavItem active={view === 'settings'} icon={<User size={20} />} label="Me" onClick={() => setView('settings')} />
-        </>
-      )}
+      <NavItem active={view === 'dashboard'} icon={<LayoutDashboard size={20} />} label="Today" onClick={() => setView('dashboard')} />
+      <NavItem active={view === 'surgical'} icon={<Scissors size={20} />} label="Surgery" onClick={() => setView('surgical')} />
+      <NavItem active={view === 'eswl'} icon={<Stethoscope size={20} />} label="ESWL" onClick={() => setView('eswl')} />
+      <NavItem active={view === 'calendar'} icon={<Calendar size={20} />} label="Theater" onClick={() => setView('calendar')} />
+      <NavItem active={view === 'admin'} icon={<Settings size={20} />} label="Admin" onClick={() => setView('admin')} />
+      <NavItem active={view === 'settings'} icon={<User size={20} />} label="Me" onClick={() => setView('settings')} />
     </View>
   );
 }

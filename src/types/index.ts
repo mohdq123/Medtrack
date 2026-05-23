@@ -10,6 +10,7 @@ export interface User {
   name: string;
   phoneNumber?: string;
   profilePicture?: string; // base64 or URL
+  confirmed?: boolean;
 }
 
 export interface Investigation {
@@ -48,6 +49,8 @@ export interface AdminMessage {
   id: string;
   type: 'text' | 'voice';
   content: string;
+  audioUrl?: string;   // Public R2 URL for voice broadcasts
+  duration?: number;   // Duration in seconds
   timestamp: Date | string;
   sender: string;
 }

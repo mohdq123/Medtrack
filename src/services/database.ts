@@ -45,6 +45,7 @@ export const testConnectionAndInit = async (url: string): Promise<boolean> => {
     
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS confirmed BOOLEAN DEFAULT TRUE`;
     
     // Create patients table
     await sql`
@@ -85,6 +86,9 @@ export const testConnectionAndInit = async (url: string): Promise<boolean> => {
         sender TEXT NOT NULL
       )
     `;
+
+    await sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_url TEXT`;
+    await sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS duration INTEGER`;
 
     // Check if we need to seed the default users
     const usersCountResult = await sql`SELECT COUNT(*)::integer as count FROM users`;

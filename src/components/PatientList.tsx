@@ -103,8 +103,26 @@ export default function PatientList({
                     </View>
                   )}
                   {p.requiresApproval && !p.isApproved && (
-                    <View style={{ backgroundColor: 'rgba(245, 158, 11, 0.1)', borderWidth: 0.5, borderColor: 'rgba(245, 158, 11, 0.3)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 6 }}>
-                      <Text style={{ color: '#f59e0b', fontSize: 10, fontWeight: '800' }}>Pending Approval</Text>
+                    <View style={{ 
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: 'rgba(245, 158, 11, 0.08)', 
+                      borderWidth: 1, 
+                      borderColor: 'rgba(245, 158, 11, 0.25)', 
+                      paddingHorizontal: 8, 
+                      paddingVertical: 3, 
+                      borderRadius: 20, 
+                      marginLeft: 8,
+                      shadowColor: '#f59e0b',
+                      shadowOffset: { width: 0, height: 0 },
+                      shadowOpacity: 0.1,
+                      shadowRadius: 4,
+                      elevation: 1
+                    }}>
+                      <Clock size={10} color="#f59e0b" style={{ marginRight: 4 }} />
+                      <Text style={{ color: '#f59e0b', fontSize: 9, fontWeight: '800', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                        Pending Approval
+                      </Text>
                     </View>
                   )}
                 </View>
