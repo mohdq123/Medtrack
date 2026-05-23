@@ -50,7 +50,7 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
     labPdfUrl: ''
   });
 
-  const isRescheduleDisabled = !!(initialData?.appointmentDate && currentUserRole !== 'admin');
+  const isRescheduleDisabled = false;
 
   const [newInvestType, setNewInvestType] = useState<InvestigationType>('X-ray');
   const [isUploading, setIsUploading] = useState(false);
@@ -102,7 +102,7 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
         nationalId: initialData.nationalId || '',
         requiresApproval: initialData.requiresApproval || false,
         isApproved: initialData.isApproved !== false,
-        surgeonName: initialData.surgeonName || (currentUserRole === 'admin' ? 'Dr. Admin' : currentUserRole === 'consultant' ? 'Dr. Consultant' : 'Dr. Resident'),
+        surgeonName: initialData.surgeonName || 'Dr. Admin',
         isSpecial: !!initialData.isSpecial,
         labPdfUrl: initialData.labPdfUrl || ''
       });
@@ -126,7 +126,7 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
         nationalId: '',
         requiresApproval: false,
         isApproved: true,
-        surgeonName: currentUserRole === 'admin' ? 'Dr. Admin' : currentUserRole === 'consultant' ? 'Dr. Consultant' : 'Dr. Resident',
+        surgeonName: 'Dr. Admin',
         isSpecial: false,
         labPdfUrl: ''
       });
@@ -537,20 +537,16 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Dr. Role *</Text>
+              <Text style={styles.label}>Surgeon Name *</Text>
               <View style={styles.surgeonPicker}>
                 {['Dr. Admin', 'Dr. Resident', 'Dr. Consultant'].map((sName) => {
-                  const profileSurgeonName = currentUserRole === 'admin' ? 'Dr. Admin' : currentUserRole === 'consultant' ? 'Dr. Consultant' : 'Dr. Resident';
-                  const isDisabled = sName !== profileSurgeonName;
                   return (
                     <TouchableOpacity 
                       key={sName}
                       style={[
                         styles.surgeonBtn, 
-                        formData.surgeonName === sName && styles.surgeonBtnActive,
-                        isDisabled && { opacity: 0.4 }
+                        formData.surgeonName === sName && styles.surgeonBtnActive
                       ]}
-                      disabled={isDisabled}
                       onPress={() => setFormData({ ...formData, surgeonName: sName })}
                     >
                       <Text style={[
@@ -665,11 +661,7 @@ export default function PatientForm({ isOpen, onClose, onSubmit, initialData, cu
                     : 'Select Date & Time'}
                 </Text>
               </TouchableOpacity>
-              {isRescheduleDisabled && (
-                <Text style={styles.disabledDateWarning}>
-                  * Rescheduling is restricted to Admins only.
-                </Text>
-              )}
+
               {isNotSunday && (
                 <View style={styles.warningContainer}>
                   <AlertTriangle size={12} color="#f59e0b" style={{ marginRight: 4 }} />
