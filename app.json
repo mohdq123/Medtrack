@@ -40,8 +40,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "03475430-5b8f-4153-a479-028b4348eb82"
+        "projectId": "4134e330-23ab-42af-962c-d0c2ef514973"
       }
-    }
+    },
+    "owner": "mohd_y"
   }
 }
